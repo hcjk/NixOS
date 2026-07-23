@@ -2,6 +2,8 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+mod acpi;
+mod apic;
 mod cpu;
 mod framebuffer;
 mod gdt;
@@ -10,6 +12,7 @@ mod interrupts;
 mod memory;
 mod monitor;
 mod paging;
+mod pci;
 mod ps2;
 mod serial;
 
@@ -75,7 +78,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.3.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.4.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -109,7 +112,7 @@ extern "C" fn kernel_main() -> ! {
         let _ = writeln!(serial, "fatal: unable to reserve the kernel heap");
         halt();
     };
-    let paging = paging::PagingInfo::detect(hhdm_offset);
+    let mut paging = paging::PagingInfo::detect(hhdm_offset);
     let _ = writeln!(
         serial,
         "paging: CR3 {:#x}, HHDM {:#x}, heap {:#x} ({} KiB)",
@@ -127,6 +130,37 @@ extern "C" fn kernel_main() -> ! {
     } else {
         let _ = writeln!(serial, "ACPI RSDP: unavailable");
     }
+    let platform = if let Some(address) = rsdp_address {
+        match acpi::PlatformInfo::discover(address, hhdm_offset) {
+            Ok(info) => {
+                let _ = writeln!(
+                    serial,
+                    "ACPI: rev {}, {} tables, root={}, CPUs={}, IOAPIC={}, HPET={}, MCFG={}",
+                    info.revision,
+                    info.table_count,
+                    if info.uses_xsdt { "XSDT" } else { "RSDT" },
+                    info.enabled_processor_count,
+                    info.io_apic.is_some(),
+                    info.hpet.is_some(),
+                    info.mcfg.is_some()
+                );
+                Some(info)
+            }
+            Err(error) => {
+                let _ = writeln!(serial, "ACPI discovery failed: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let pci = pci::PciInventory::scan();
+    let _ = writeln!(
+        serial,
+        "PCI: {} functions discovered{}",
+        pci.count(),
+        if pci.truncated() { " (truncated)" } else { "" }
+    );
 
     let framebuffer = FRAMEBUFFER_REQUEST
         .response()
@@ -148,7 +182,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.3.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.4.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -159,7 +193,8 @@ extern "C" fn kernel_main() -> ! {
          [ok] {} memory regions, {} MiB usable\n\
          [ok] ACPI RSDP at {:#x}\n\
          [ok] framebuffer {}\n\
-         [ok] 256 KiB physical-frame-backed kernel heap",
+         [ok] 512 KiB reclaiming kernel heap\n\
+         [ok] ACPI platform tables and PCI scan",
         memory_map.entries().len(),
         allocator.usable_mebibytes(),
         rsdp_address.unwrap_or(0),
@@ -176,29 +211,44 @@ extern "C" fn kernel_main() -> ! {
         "cpu: APIC={} NX={} SSE2={}",
         cpu.has_apic, cpu.has_nx, cpu.has_sse2
     );
-    interrupts::init();
+    let interrupt_controller = interrupts::init(platform.as_ref(), &mut paging, &mut allocator);
     let _ = writeln!(
         serial,
-        "interrupts: GDT/TSS/IDT online, legacy PIC, PIT 100 Hz, PS/2 IRQ1"
+        "interrupts: GDT/TSS/IDT online, {}, PIT 100 Hz, PS/2 keyboard=true, mouse={}",
+        interrupt_controller.mode.name(),
+        interrupt_controller.mouse_enabled
     );
-    let _ = writeln!(serial, "milestone 3 ready; entering kernel monitor");
+    if let Some(apic) = interrupt_controller.apic {
+        let _ = writeln!(
+            serial,
+            "APIC: local id={} v{:#x}, IOAPIC id={} v{:#x}, redirections={}",
+            apic.local_id,
+            apic.local_version,
+            apic.io_id,
+            apic.io_version,
+            apic.redirection_entries
+        );
+    }
+    let _ = writeln!(serial, "milestone 4 ready; entering kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,
-        "[ok] GDT/TSS/IDT, legacy PIC, PIT, and PS/2 IRQ online"
+        "[ok] GDT/TSS/IDT, {}, PIT, keyboard and mouse IRQs",
+        interrupt_controller.mode.name()
     );
     console.reset_color();
 
-    monitor::Monitor::new(
-        &mut console,
-        &mut serial,
-        &allocator,
+    let context = monitor::MonitorContext::new(
+        &mut allocator,
         &mut heap,
-        &paging,
+        &mut paging,
         &cpu,
+        platform.as_ref(),
+        &pci,
+        interrupt_controller,
         monitor::BootMetadata::new(memory_map.entries().len(), rsdp_address),
-    )
-    .run()
+    );
+    monitor::Monitor::new(&mut console, &mut serial, context).run()
 }
 
 #[panic_handler]

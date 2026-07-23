@@ -7,8 +7,8 @@ Legend: **done**, *foundation*, planned.
    polling, interactive kernel monitor, block-device API**
 3. **GDT/TSS/IDT, exception handlers, legacy PIC/PIT interrupts,
    interrupt-driven PS/2 keyboard, early kernel heap, page-table inspection**
-4. Virtual mapping/unmapping, general heap, ACPI, APIC/I/O APIC, HPET,
-   PCI/PCIe, PS/2 mouse
+4. **Virtual mapping/unmapping, reclaiming heap, ACPI RSDT/XSDT/MADT/
+   HPET/MCFG discovery, APIC/I/O APIC routing, PCI mechanism 1, PS/2 mouse**
 5. *MBR/GPT validation*, AHCI, IDE, block cache, FAT32
 6. *NexFS format and superblock checking*, full inode/directory implementation
 7. Processes, ELF loader, syscalls, VFS, scheduler
@@ -36,6 +36,15 @@ Legend: **done**, *foundation*, planned.
   faults have a dedicated TSS interrupt stack.
 - The kernel can allocate and verify memory from a physical-frame-backed heap
   and inspect active four-level page-table mappings.
+- ACPI checksums and table layouts are validated under BIOS RSDT and UEFI XSDT
+  boot paths; MADT interrupt topology, HPET, and MCFG data are discovered.
+- The local APIC and I/O APIC route PIT, keyboard, and mouse interrupts, with a
+  legacy PIC fallback when platform discovery or APIC setup is unavailable.
+- The heap supports aligned variable-size allocations, deallocation,
+  coalescing, reuse, and fragmentation statistics.
+- A scratch virtual page can be mapped, translated, written, unmapped, and
+  invalidated; PCI configuration mechanism 1 discovers device functions.
+- IRQ12 mouse packets are decoded into signed motion and button events.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

@@ -20,6 +20,12 @@ static SCANCODES: ScancodeQueue = ScancodeQueue {
     tail: AtomicUsize::new(0),
 };
 
+static MOUSE_BYTES: ScancodeQueue = ScancodeQueue {
+    bytes: UnsafeCell::new([0; QUEUE_CAPACITY]),
+    head: AtomicUsize::new(0),
+    tail: AtomicUsize::new(0),
+};
+
 pub fn enable_keyboard_interrupt() {
     // SAFETY: NexOS owns the i8042 controller. The bounded waits prevent a
     // missing controller from hanging boot indefinitely.
@@ -50,28 +56,63 @@ pub fn enable_keyboard_interrupt() {
 }
 
 pub fn enqueue_scancode(scancode: u8) {
-    let tail = SCANCODES.tail.load(Ordering::Relaxed);
+    enqueue(&SCANCODES, scancode);
+}
+
+pub fn enqueue_mouse_byte(byte: u8) {
+    enqueue(&MOUSE_BYTES, byte);
+}
+
+pub fn enable_mouse() -> bool {
+    // SAFETY: NexOS owns the i8042 controller while interrupts are disabled.
+    unsafe {
+        if !wait_input_clear() {
+            return false;
+        }
+        outb(0x64, 0xa8);
+        if !wait_input_clear() {
+            return false;
+        }
+        outb(0x64, 0x20);
+        if !wait_output_full() {
+            return false;
+        }
+        let command_byte = inb(0x60);
+        if !wait_input_clear() {
+            return false;
+        }
+        outb(0x64, 0x60);
+        if !wait_input_clear() {
+            return false;
+        }
+        outb(0x60, (command_byte | 0b11) & !0x30);
+        send_mouse_command(0xf6) && send_mouse_command(0xf4)
+    }
+}
+
+fn enqueue(queue: &ScancodeQueue, byte: u8) {
+    let tail = queue.tail.load(Ordering::Relaxed);
     let next = (tail + 1) % QUEUE_CAPACITY;
-    if next == SCANCODES.head.load(Ordering::Acquire) {
+    if next == queue.head.load(Ordering::Acquire) {
         return;
     }
     // SAFETY: Only the IRQ producer writes the slot at the unpublished tail.
-    unsafe { (*SCANCODES.bytes.get())[tail] = scancode };
-    SCANCODES.tail.store(next, Ordering::Release);
+    unsafe { (*queue.bytes.get())[tail] = byte };
+    queue.tail.store(next, Ordering::Release);
 }
 
-fn dequeue_scancode() -> Option<u8> {
-    let head = SCANCODES.head.load(Ordering::Relaxed);
-    if head == SCANCODES.tail.load(Ordering::Acquire) {
+fn dequeue(queue: &ScancodeQueue) -> Option<u8> {
+    let head = queue.head.load(Ordering::Relaxed);
+    if head == queue.tail.load(Ordering::Acquire) {
         return None;
     }
     // SAFETY: The acquire load observed the producer's publication of this
     // slot, and only this consumer advances the head.
-    let scancode = unsafe { (*SCANCODES.bytes.get())[head] };
-    SCANCODES
+    let byte = unsafe { (*queue.bytes.get())[head] };
+    queue
         .head
         .store((head + 1) % QUEUE_CAPACITY, Ordering::Release);
-    Some(scancode)
+    Some(byte)
 }
 
 pub struct Keyboard {
@@ -91,7 +132,7 @@ impl Keyboard {
     }
 
     pub fn read_character(&mut self) -> Option<u8> {
-        self.translate(dequeue_scancode()?)
+        self.translate(dequeue(&SCANCODES)?)
     }
 
     fn translate(&mut self, scancode: u8) -> Option<u8> {
@@ -126,6 +167,71 @@ impl Keyboard {
                 Some(apply_shift(base, self.shift, self.caps_lock))
             }
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct MouseEvent {
+    pub delta_x: i16,
+    pub delta_y: i16,
+    pub buttons: u8,
+}
+
+pub struct Mouse {
+    packet: [u8; 3],
+    packet_index: usize,
+    total_events: u64,
+    latest: Option<MouseEvent>,
+}
+
+impl Mouse {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            packet: [0; 3],
+            packet_index: 0,
+            total_events: 0,
+            latest: None,
+        }
+    }
+
+    pub fn drain(&mut self) {
+        while let Some(byte) = dequeue(&MOUSE_BYTES) {
+            if self.packet_index == 0 && byte & 0x08 == 0 {
+                continue;
+            }
+            self.packet[self.packet_index] = byte;
+            self.packet_index += 1;
+            if self.packet_index == self.packet.len() {
+                self.packet_index = 0;
+                if self.packet[0] & 0xc0 == 0 {
+                    let mut delta_x = i16::from(self.packet[1]);
+                    let mut delta_y = i16::from(self.packet[2]);
+                    if self.packet[0] & 0x10 != 0 {
+                        delta_x -= 256;
+                    }
+                    if self.packet[0] & 0x20 != 0 {
+                        delta_y -= 256;
+                    }
+                    self.latest = Some(MouseEvent {
+                        delta_x,
+                        delta_y: -delta_y,
+                        buttons: self.packet[0] & 7,
+                    });
+                    self.total_events += 1;
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn latest(&self) -> Option<MouseEvent> {
+        self.latest
+    }
+
+    #[must_use]
+    pub const fn total_events(&self) -> u64 {
+        self.total_events
     }
 }
 
@@ -271,4 +377,22 @@ unsafe fn wait_output_full() -> bool {
         core::hint::spin_loop();
     }
     false
+}
+
+unsafe fn send_mouse_command(command: u8) -> bool {
+    // SAFETY: The caller owns the i8042 command/data ports.
+    unsafe {
+        if !wait_input_clear() {
+            return false;
+        }
+        outb(0x64, 0xd4);
+        if !wait_input_clear() {
+            return false;
+        }
+        outb(0x60, command);
+        if !wait_output_full() {
+            return false;
+        }
+        inb(0x60) == 0xfa
+    }
 }

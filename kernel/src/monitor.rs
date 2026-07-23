@@ -1,16 +1,20 @@
 use core::arch::asm;
 use core::fmt::{self, Write};
 
+use crate::acpi::PlatformInfo;
 use crate::cpu::CpuInfo;
 use crate::framebuffer::{ACCENT, Color, Console, FOREGROUND, INFO, MUTED, WARNING};
 use crate::heap::KernelHeap;
 use crate::interrupts;
+use crate::interrupts::ControllerInfo;
 use crate::memory::FrameAllocator;
 use crate::paging::PagingInfo;
-use crate::ps2::{self, Keyboard};
+use crate::pci::PciInventory;
+use crate::ps2::{self, Keyboard, Mouse};
 use crate::serial::SerialPort;
 
 const MAX_COMMAND_LENGTH: usize = 128;
+const MAP_TEST_VIRTUAL_ADDRESS: u64 = 0xffff_ff00_0000_0000;
 
 #[derive(Clone, Copy)]
 pub struct BootMetadata {
@@ -32,34 +36,75 @@ pub struct Monitor<'a> {
     console: &'a mut Console,
     serial: &'a mut SerialPort,
     keyboard: Keyboard,
-    allocator: &'a FrameAllocator,
+    mouse: Mouse,
+    allocator: &'a mut FrameAllocator,
     heap: &'a mut KernelHeap,
-    paging: &'a PagingInfo,
+    paging: &'a mut PagingInfo,
     cpu: &'a CpuInfo,
+    platform: Option<&'a PlatformInfo>,
+    pci: &'a PciInventory,
+    controller: ControllerInfo,
     memory_region_count: usize,
     rsdp_address: Option<usize>,
 }
 
+pub struct MonitorContext<'a> {
+    allocator: &'a mut FrameAllocator,
+    heap: &'a mut KernelHeap,
+    paging: &'a mut PagingInfo,
+    cpu: &'a CpuInfo,
+    platform: Option<&'a PlatformInfo>,
+    pci: &'a PciInventory,
+    controller: ControllerInfo,
+    boot: BootMetadata,
+}
+
+impl<'a> MonitorContext<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        allocator: &'a mut FrameAllocator,
+        heap: &'a mut KernelHeap,
+        paging: &'a mut PagingInfo,
+        cpu: &'a CpuInfo,
+        platform: Option<&'a PlatformInfo>,
+        pci: &'a PciInventory,
+        controller: ControllerInfo,
+        boot: BootMetadata,
+    ) -> Self {
+        Self {
+            allocator,
+            heap,
+            paging,
+            cpu,
+            platform,
+            pci,
+            controller,
+            boot,
+        }
+    }
+}
+
 impl<'a> Monitor<'a> {
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         console: &'a mut Console,
         serial: &'a mut SerialPort,
-        allocator: &'a FrameAllocator,
-        heap: &'a mut KernelHeap,
-        paging: &'a PagingInfo,
-        cpu: &'a CpuInfo,
-        boot: BootMetadata,
+        context: MonitorContext<'a>,
     ) -> Self {
         Self {
             console,
             serial,
             keyboard: Keyboard::new(),
-            allocator,
-            heap,
-            paging,
-            cpu,
-            memory_region_count: boot.memory_region_count,
-            rsdp_address: boot.rsdp_address,
+            mouse: Mouse::new(),
+            allocator: context.allocator,
+            heap: context.heap,
+            paging: context.paging,
+            cpu: context.cpu,
+            platform: context.platform,
+            pci: context.pci,
+            controller: context.controller,
+            memory_region_count: context.boot.memory_region_count,
+            rsdp_address: context.boot.rsdp_address,
         }
     }
 
@@ -113,12 +158,16 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "Commands: help clear uname meminfo heapinfo heaptest cpuinfo bootinfo"
+                        "Commands: help clear uname meminfo heapinfo heapstats heaptest cpuinfo"
                     ),
                 );
                 self.write_line(
                     FOREGROUND,
-                    format_args!("          uptime virtinfo int3 reboot halt echo"),
+                    format_args!("          bootinfo acpi lspci irqinfo mouseinfo uptime"),
+                );
+                self.write_line(
+                    FOREGROUND,
+                    format_args!("          virtinfo maptest int3 reboot halt echo"),
                 );
             }
             b"clear" => {
@@ -130,7 +179,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.3.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.4.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -144,12 +193,23 @@ impl<'a> Monitor<'a> {
             b"heapinfo" => self.write_line(
                 FOREGROUND,
                 format_args!(
-                    "heap: virt={:#x}, phys={:#x}, used={}/{}, allocations={}",
-                    self.heap.virtual_start(),
-                    self.heap.physical_start(),
+                    "heap: used={}/{}, free={}, largest={}, active={}, peak={}",
                     self.heap.used(),
                     self.heap.size(),
-                    self.heap.allocations()
+                    self.heap.free_bytes(),
+                    self.heap.largest_free_block(),
+                    self.heap.active_allocations(),
+                    self.heap.peak_used()
+                ),
+            ),
+            b"heapstats" => self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "heap: virt={:#x}, phys={:#x}, allocs={}, frees={}",
+                    self.heap.virtual_start(),
+                    self.heap.physical_start(),
+                    self.heap.total_allocations(),
+                    self.heap.deallocations()
                 ),
             ),
             b"heaptest" => self.test_heap(),
@@ -170,6 +230,10 @@ impl<'a> Monitor<'a> {
                     format_args!("Limine memory regions: {region_count}, RSDP: {rsdp_address:#x}"),
                 );
             }
+            b"acpi" => self.print_acpi(),
+            b"lspci" => self.print_pci(),
+            b"irqinfo" => self.print_interrupts(),
+            b"mouseinfo" => self.print_mouse(),
             b"uptime" => {
                 let milliseconds = interrupts::uptime_milliseconds();
                 self.write_line(
@@ -207,6 +271,7 @@ impl<'a> Monitor<'a> {
                     self.write_line(WARNING, format_args!("kernel mapping was not found"));
                 }
             }
+            b"maptest" => self.test_mapping(),
             b"int3" => {
                 self.write_line(MUTED, format_args!("Triggering breakpoint interrupt..."));
                 interrupts::trigger_breakpoint();
@@ -256,13 +321,182 @@ impl<'a> Monitor<'a> {
             unsafe { allocation.as_ptr().add(usize::from(index)).write(value) };
             checksum += u64::from(value);
         }
+        let first_address = allocation.as_ptr() as usize;
+        let released = self.heap.deallocate(allocation);
+        let reused = if let Some(second) = self.heap.allocate(64, 16) {
+            let same_address = second.as_ptr() as usize == first_address;
+            let _ = self.heap.deallocate(second);
+            same_address
+        } else {
+            false
+        };
         self.write_line(
             INFO,
             format_args!(
-                "heap allocation ok: address={:#x}, size=64, checksum={checksum}",
-                allocation.as_ptr() as usize
+                "heap ok: address={first_address:#x}, checksum={checksum}, released={released}, reused={reused}"
             ),
         );
+    }
+
+    fn test_mapping(&mut self) {
+        let Some(frame) = self.allocator.allocate() else {
+            self.write_line(WARNING, format_args!("maptest: no free physical frame"));
+            return;
+        };
+        let result = self
+            .paging
+            .map_writable_page(MAP_TEST_VIRTUAL_ADDRESS, frame, self.allocator);
+        if let Err(error) = result {
+            self.write_line(WARNING, format_args!("maptest: map failed: {error}"));
+            return;
+        }
+        let expected = 0x4e45_584f_534d_4150_u64;
+        // SAFETY: The test virtual page was just mapped writable to an
+        // exclusively allocated frame.
+        unsafe {
+            core::ptr::write_volatile(MAP_TEST_VIRTUAL_ADDRESS as *mut u64, expected);
+        }
+        // SAFETY: The same live test mapping remains present.
+        let observed = unsafe { core::ptr::read_volatile(MAP_TEST_VIRTUAL_ADDRESS as *const u64) };
+        let translated = self
+            .paging
+            .translate(MAP_TEST_VIRTUAL_ADDRESS)
+            .map(|mapping| mapping.physical_address);
+        let unmapped = self.paging.unmap_page(MAP_TEST_VIRTUAL_ADDRESS);
+        let unmapped_expected = matches!(unmapped, Ok(value) if value == frame);
+        let passed = observed == expected && translated == Some(frame) && unmapped_expected;
+        self.write_line(
+            if passed { INFO } else { WARNING },
+            format_args!(
+                "maptest: phys={frame:#x}, translated={:#x}, value={observed:#x}, unmapped={}, passed={passed}",
+                translated.unwrap_or(0),
+                unmapped.is_ok()
+            ),
+        );
+    }
+
+    fn print_acpi(&mut self) {
+        let Some(platform) = self.platform else {
+            self.write_line(WARNING, format_args!("ACPI platform data unavailable"));
+            return;
+        };
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "ACPI rev {}, root={}, tables={}, CPUs={}, ISOs={}",
+                platform.revision,
+                if platform.uses_xsdt { "XSDT" } else { "RSDT" },
+                platform.table_count,
+                platform.enabled_processor_count,
+                platform.interrupt_override_count()
+            ),
+        );
+        let local_apic = platform.local_apic_address.unwrap_or(0);
+        let (io_id, io_apic, global_base) = platform.io_apic.map_or((0, 0, 0), |info| {
+            (info.id, info.address, info.global_interrupt_base)
+        });
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "MADT: LAPIC={local_apic:#x}, IOAPIC id={io_id} at {io_apic:#x}, GSI base={global_base}"
+            ),
+        );
+        if let Some(hpet) = platform.hpet {
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "HPET: space={}, address={:#x}, minimum tick={}",
+                    hpet.address_space, hpet.address, hpet.minimum_tick
+                ),
+            );
+        }
+        if let Some(mcfg) = platform.mcfg {
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "MCFG: base={:#x}, segment={}, buses={}-{}",
+                    mcfg.base_address, mcfg.segment_group, mcfg.start_bus, mcfg.end_bus
+                ),
+            );
+        }
+    }
+
+    fn print_pci(&mut self) {
+        let count = self.pci.count();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "PCI functions: {count}{}",
+                if self.pci.truncated() {
+                    " (inventory truncated)"
+                } else {
+                    ""
+                }
+            ),
+        );
+        for index in 0..count {
+            let device = self.pci.devices()[index];
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "{:02x}:{:02x}.{} {:04x}:{:04x} rev {:02x} class {:02x}:{:02x}:{:02x} {}",
+                    device.bus,
+                    device.device,
+                    device.function,
+                    device.vendor_id,
+                    device.device_id,
+                    device.revision,
+                    device.class,
+                    device.subclass,
+                    device.programming_interface,
+                    device.class_name()
+                ),
+            );
+        }
+    }
+
+    fn print_interrupts(&mut self) {
+        let mode = self.controller.mode.name();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "interrupt controller: {mode}, PIT={} Hz, mouse={}",
+                100,
+                yes_no(self.controller.mouse_enabled)
+            ),
+        );
+        if let Some(apic) = self.controller.apic {
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "LAPIC id={} version={:#x}; IOAPIC id={} version={:#x}, entries={}",
+                    apic.local_id,
+                    apic.local_version,
+                    apic.io_id,
+                    apic.io_version,
+                    apic.redirection_entries
+                ),
+            );
+        }
+    }
+
+    fn print_mouse(&mut self) {
+        self.mouse.drain();
+        let total = self.mouse.total_events();
+        if let Some(event) = self.mouse.latest() {
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "mouse events={total}, last dx={}, dy={}, buttons={:#05b}",
+                    event.delta_x, event.delta_y, event.buttons
+                ),
+            );
+        } else {
+            self.write_line(
+                MUTED,
+                format_args!("mouse events=0; move or click the PS/2 mouse, then retry"),
+            );
+        }
     }
 
     fn write_line(&mut self, color: Color, arguments: fmt::Arguments<'_>) {

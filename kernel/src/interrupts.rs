@@ -1,10 +1,14 @@
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
+use crate::acpi::PlatformInfo;
+use crate::apic::{self, ApicInfo};
+use crate::memory::FrameAllocator;
+use crate::paging::PagingInfo;
 use crate::serial::SerialPort;
 use crate::{gdt, ps2};
 
@@ -12,10 +16,12 @@ const PIC_1_OFFSET: u8 = 32;
 const PIC_2_OFFSET: u8 = 40;
 const TIMER_VECTOR: u8 = PIC_1_OFFSET;
 const KEYBOARD_VECTOR: u8 = PIC_1_OFFSET + 1;
+const MOUSE_VECTOR: u8 = PIC_2_OFFSET + 4;
 const PIT_FREQUENCY_HZ: u64 = 100;
 const PIT_DIVISOR: u16 = 11_931;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
+static APIC_MODE: AtomicBool = AtomicBool::new(false);
 
 struct StaticIdt(UnsafeCell<InterruptDescriptorTable>);
 
@@ -25,7 +31,34 @@ unsafe impl Sync for StaticIdt {}
 
 static IDT: StaticIdt = StaticIdt(UnsafeCell::new(InterruptDescriptorTable::new()));
 
-pub fn init() {
+#[derive(Clone, Copy)]
+pub enum ControllerMode {
+    Apic,
+    LegacyPic,
+}
+
+impl ControllerMode {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Apic => "APIC/I/O APIC",
+            Self::LegacyPic => "legacy PIC",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ControllerInfo {
+    pub mode: ControllerMode,
+    pub apic: Option<ApicInfo>,
+    pub mouse_enabled: bool,
+}
+
+pub fn init(
+    platform: Option<&PlatformInfo>,
+    paging: &mut PagingInfo,
+    allocator: &mut FrameAllocator,
+) -> ControllerInfo {
     gdt::init();
 
     // SAFETY: The boot CPU is the only active CPU and interrupts are still
@@ -43,15 +76,33 @@ pub fn init() {
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt[TIMER_VECTOR].set_handler_fn(timer_handler);
         idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_handler);
+        idt[MOUSE_VECTOR].set_handler_fn(mouse_handler);
         idt[PIC_1_OFFSET + 7].set_handler_fn(spurious_master_handler);
         idt[PIC_2_OFFSET + 7].set_handler_fn(spurious_slave_handler);
+        idt[255].set_handler_fn(spurious_apic_handler);
         idt.load_unsafe();
 
-        select_legacy_pic_mode();
-        remap_pic();
         configure_pit();
         ps2::enable_keyboard_interrupt();
+        let mouse_enabled = ps2::enable_mouse();
+        let apic = platform.and_then(|info| apic::initialize(info, paging, allocator).ok());
+        let mode = if let Some(apic_info) = apic {
+            APIC_MODE.store(true, Ordering::Relaxed);
+            mask_pic();
+            let _ = apic_info;
+            ControllerMode::Apic
+        } else {
+            APIC_MODE.store(false, Ordering::Relaxed);
+            select_legacy_pic_mode();
+            remap_pic();
+            ControllerMode::LegacyPic
+        };
         asm!("sti", options(nomem, nostack));
+        ControllerInfo {
+            mode,
+            apic,
+            mouse_enabled,
+        }
     }
 }
 
@@ -139,6 +190,17 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     }
 }
 
+extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
+    // SAFETY: IRQ12 owns auxiliary-device bytes from the i8042 output buffer.
+    unsafe {
+        let status = inb(0x64);
+        if status & 1 != 0 && status & 0x20 != 0 {
+            ps2::enqueue_mouse_byte(inb(0x60));
+        }
+        end_of_interrupt(12);
+    }
+}
+
 extern "x86-interrupt" fn spurious_master_handler(_frame: InterruptStackFrame) {
     // A spurious IRQ7 does not require an EOI.
 }
@@ -148,6 +210,8 @@ extern "x86-interrupt" fn spurious_slave_handler(_frame: InterruptStackFrame) {
     // SAFETY: Writing an EOI to the master PIC is valid here.
     unsafe { outb(0x20, 0x20) };
 }
+
+extern "x86-interrupt" fn spurious_apic_handler(_frame: InterruptStackFrame) {}
 
 fn fatal_exception(name: &str, frame: &InterruptStackFrame, error_code: Option<u64>) -> ! {
     let mut serial = SerialPort::new(0x3f8);
@@ -191,11 +255,10 @@ unsafe fn remap_pic() {
         outb(0xa1, 0x01);
         io_wait();
 
-        // Enable only the PIT and keyboard on the master; keep the slave
-        // masked until a driver needs it.
+        // Enable PIT, keyboard, and the slave cascade. IRQ12 is the PS/2 mouse.
         let _ = (master_mask, slave_mask);
-        outb(0x21, 0b1111_1100);
-        outb(0xa1, 0xff);
+        outb(0x21, 0b1111_1000);
+        outb(0xa1, 0b1110_1111);
     }
 }
 
@@ -212,10 +275,22 @@ unsafe fn configure_pit() {
 unsafe fn end_of_interrupt(irq: u8) {
     // SAFETY: The caller provides the IRQ currently being serviced.
     unsafe {
+        if APIC_MODE.load(Ordering::Relaxed) {
+            apic::end_of_interrupt();
+            return;
+        }
         if irq >= 8 {
             outb(0xa0, 0x20);
         }
         outb(0x20, 0x20);
+    }
+}
+
+unsafe fn mask_pic() {
+    // SAFETY: The I/O APIC owns interrupt delivery after this point.
+    unsafe {
+        outb(0x21, 0xff);
+        outb(0xa1, 0xff);
     }
 }
 
