@@ -1,0 +1,21 @@
+[package]
+name = "nexos-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+limine = "0.6.5"
+nexos-abi = { path = "../crates/nexos-abi" }
+noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = [
+    "regular",
+    "size_16",
+    "unicode-basic-latin",
+] }
+
+[[bin]]
+name = "nexos-kernel"
+path = "src/main.rs"
+
+[lints]
+workspace = true

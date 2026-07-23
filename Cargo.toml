@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nexos-abi",
+    "crates/nexos-storage",
+    "crates/nexfs",
+    "kernel",
+    "tools/nexosctl",
+]
+default-members = [
+    "crates/nexos-abi",
+    "crates/nexos-storage",
+    "crates/nexfs",
+    "tools/nexosctl",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Emilijus"]
+repository = "https://github.com/Emilijus/NexOS"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+

@@ -1,0 +1,7 @@
+/target/
+/build/
+/vendor/limine/
+*.img
+*.iso
+*.log
+

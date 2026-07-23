@@ -1,0 +1,17 @@
+[package]
+name = "nexosctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fatfs = "0.3.6"
+nexfs = { path = "../../crates/nexfs" }
+nexos-storage = { path = "../../crates/nexos-storage" }
+
+[[bin]]
+name = "nexosctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
