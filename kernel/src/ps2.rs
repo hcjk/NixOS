@@ -1,4 +1,78 @@
 use core::arch::asm;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+const QUEUE_CAPACITY: usize = 256;
+
+struct ScancodeQueue {
+    bytes: UnsafeCell<[u8; QUEUE_CAPACITY]>,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+}
+
+// SAFETY: The IRQ handler is the only producer and the monitor is the only
+// consumer. Atomic indices publish access to individual queue slots.
+unsafe impl Sync for ScancodeQueue {}
+
+static SCANCODES: ScancodeQueue = ScancodeQueue {
+    bytes: UnsafeCell::new([0; QUEUE_CAPACITY]),
+    head: AtomicUsize::new(0),
+    tail: AtomicUsize::new(0),
+};
+
+pub fn enable_keyboard_interrupt() {
+    // SAFETY: NexOS owns the i8042 controller. The bounded waits prevent a
+    // missing controller from hanging boot indefinitely.
+    unsafe {
+        if !wait_input_clear() {
+            return;
+        }
+        outb(0x64, 0xae);
+        if !wait_input_clear() {
+            return;
+        }
+        outb(0x64, 0x20);
+        if !wait_output_full() {
+            return;
+        }
+        let command_byte = inb(0x60);
+        if !wait_input_clear() {
+            return;
+        }
+        outb(0x64, 0x60);
+        if !wait_input_clear() {
+            return;
+        }
+        // Enable first-port IRQ delivery and its clock while preserving the
+        // firmware-selected translation mode.
+        outb(0x60, (command_byte | 1) & !0x10);
+    }
+}
+
+pub fn enqueue_scancode(scancode: u8) {
+    let tail = SCANCODES.tail.load(Ordering::Relaxed);
+    let next = (tail + 1) % QUEUE_CAPACITY;
+    if next == SCANCODES.head.load(Ordering::Acquire) {
+        return;
+    }
+    // SAFETY: Only the IRQ producer writes the slot at the unpublished tail.
+    unsafe { (*SCANCODES.bytes.get())[tail] = scancode };
+    SCANCODES.tail.store(next, Ordering::Release);
+}
+
+fn dequeue_scancode() -> Option<u8> {
+    let head = SCANCODES.head.load(Ordering::Relaxed);
+    if head == SCANCODES.tail.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: The acquire load observed the producer's publication of this
+    // slot, and only this consumer advances the head.
+    let scancode = unsafe { (*SCANCODES.bytes.get())[head] };
+    SCANCODES
+        .head
+        .store((head + 1) % QUEUE_CAPACITY, Ordering::Release);
+    Some(scancode)
+}
 
 pub struct Keyboard {
     shift: bool,
@@ -17,17 +91,7 @@ impl Keyboard {
     }
 
     pub fn read_character(&mut self) -> Option<u8> {
-        // SAFETY: NexOS owns the i8042 ports while running at CPL0.
-        let status = unsafe { inb(0x64) };
-        if status & 1 == 0 {
-            return None;
-        }
-        // SAFETY: Output-buffer-full indicates that port 0x60 is readable.
-        let scancode = unsafe { inb(0x60) };
-        if status & 0x20 != 0 {
-            return None;
-        }
-        self.translate(scancode)
+        self.translate(dequeue_scancode()?)
     }
 
     fn translate(&mut self, scancode: u8) -> Option<u8> {
@@ -185,4 +249,26 @@ unsafe fn inb(port: u16) -> u8 {
         asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack));
     }
     value
+}
+
+unsafe fn wait_input_clear() -> bool {
+    for _ in 0..100_000 {
+        // SAFETY: The caller owns the i8042 status port.
+        if unsafe { inb(0x64) } & 2 == 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+unsafe fn wait_output_full() -> bool {
+    for _ in 0..100_000 {
+        // SAFETY: The caller owns the i8042 status port.
+        if unsafe { inb(0x64) } & 1 != 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
 }

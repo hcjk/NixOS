@@ -129,17 +129,17 @@ impl Console {
         if !self.enabled || self.cursor_x <= MARGIN_X {
             return;
         }
-        self.cursor_x = self.cursor_x.saturating_sub(self.character_width());
+        self.cursor_x = self.cursor_x.saturating_sub(Self::character_width());
         self.fill_rect(
             self.cursor_x,
             self.cursor_y,
-            self.character_width(),
+            Self::character_width(),
             LINE_HEIGHT,
             self.background,
         );
     }
 
-    fn character_width(&self) -> usize {
+    fn character_width() -> usize {
         get_raster_width(FontWeight::Regular, RasterHeight::Size16)
     }
 
@@ -172,7 +172,7 @@ impl Console {
             _ => {}
         }
 
-        let width = self.character_width();
+        let width = Self::character_width();
         if self.cursor_x + width + MARGIN_X >= self.width {
             self.newline();
         }
@@ -258,8 +258,13 @@ fn blend(background: Color, foreground: Color, intensity: u8) -> Color {
     let alpha = u16::from(intensity);
     let inverse = 255 - alpha;
     Color::new(
-        ((u16::from(background.red) * inverse + u16::from(foreground.red) * alpha) / 255) as u8,
-        ((u16::from(background.green) * inverse + u16::from(foreground.green) * alpha) / 255) as u8,
-        ((u16::from(background.blue) * inverse + u16::from(foreground.blue) * alpha) / 255) as u8,
+        blend_component(background.red, foreground.red, alpha, inverse),
+        blend_component(background.green, foreground.green, alpha, inverse),
+        blend_component(background.blue, foreground.blue, alpha, inverse),
     )
+}
+
+fn blend_component(background: u8, foreground: u8, alpha: u16, inverse: u16) -> u8 {
+    let value = (u16::from(background) * inverse + u16::from(foreground) * alpha) / 255;
+    u8::try_from(value).unwrap_or(u8::MAX)
 }

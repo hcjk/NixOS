@@ -12,6 +12,10 @@ noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features 
     "size_16",
     "unicode-basic-latin",
 ] }
+x86_64 = { version = "0.15.4", default-features = false, features = [
+    "abi_x86_interrupt",
+    "instructions",
+] }
 
 [[bin]]
 name = "nexos-kernel"

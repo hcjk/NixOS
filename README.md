@@ -4,7 +4,7 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the first two engineering milestones:
+The repository currently implements the first three engineering milestones:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -12,12 +12,16 @@ The repository currently implements the first two engineering milestones:
 - a safe disk-image utility (`nexosctl`);
 - a Limine-aware, higher-half `no_std` x86-64 kernel;
 - a physical page-frame allocator built from the Limine memory map;
+- a 256 KiB early kernel heap backed by contiguous physical frames;
+- GDT/TSS and IDT exception handling with a dedicated double-fault stack;
+- legacy PIC interrupt routing, a 100 Hz PIT clock, and timer ticks;
+- live four-level page-table inspection through Limine's higher-half map;
 - a readable 24/32-bit framebuffer terminal with scrolling and colors;
 - x86-64 feature detection and COM1 diagnostic logging; and
-- a polling PS/2 keyboard driver with an interactive kernel monitor.
+- an interrupt-driven PS/2 keyboard with an interactive kernel monitor.
 
-Interrupts, storage drivers, processes, the userspace shell, USB, and
-installation onto physical disks remain tracked milestones. See
+ACPI/APIC platform discovery, storage drivers, processes, the userspace shell,
+USB, and installation onto physical disks remain tracked milestones. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -58,9 +62,10 @@ Boot it in QEMU with a graphical framebuffer and serial output:
 powershell -ExecutionPolicy Bypass -File .\scripts\run-qemu.ps1
 ```
 
-At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `cpuinfo`, `bootinfo`,
-`clear`, `echo hello`, `reboot`, or `halt`. This is an early kernel monitor;
-the Unix-like userspace shell is a later milestone.
+At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
+`cpuinfo`, `bootinfo`, `uptime`, `virtinfo`, `int3`, `clear`, `echo hello`,
+`reboot`, or `halt`. This is an early kernel monitor; the Unix-like userspace
+shell is a later milestone.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

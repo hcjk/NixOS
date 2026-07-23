@@ -5,8 +5,10 @@ Legend: **done**, *foundation*, planned.
 1. **Workspace, ABI, higher-half kernel ELF, BIOS/UEFI boot, serial output**
 2. **Framebuffer terminal, physical frame allocator, CPUID, PS/2 keyboard
    polling, interactive kernel monitor, block-device API**
-3. Interrupts, GDT/TSS/IDT, virtual memory manager, kernel heap
-4. ACPI, APIC, timers, PCI/PCIe, interrupt-driven PS/2 keyboard and mouse
+3. **GDT/TSS/IDT, exception handlers, legacy PIC/PIT interrupts,
+   interrupt-driven PS/2 keyboard, early kernel heap, page-table inspection**
+4. Virtual mapping/unmapping, general heap, ACPI, APIC/I/O APIC, HPET,
+   PCI/PCIe, PS/2 mouse
 5. *MBR/GPT validation*, AHCI, IDE, block cache, FAT32
 6. *NexFS format and superblock checking*, full inode/directory implementation
 7. Processes, ELF loader, syscalls, VFS, scheduler
@@ -28,6 +30,12 @@ Legend: **done**, *foundation*, planned.
   commands.
 - The physical frame allocator reserves low memory and returns page-aligned
   frames from usable memory-map entries.
+- A 100 Hz PIT interrupt advances monotonic ticks and IRQ1 feeds the keyboard
+  queue under both BIOS and UEFI.
+- Breakpoint and page-fault exceptions enter documented IDT handlers; double
+  faults have a dedicated TSS interrupt stack.
+- The kernel can allocate and verify memory from a physical-frame-backed heap
+  and inspect active four-level page-table mappings.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

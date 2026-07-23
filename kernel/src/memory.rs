@@ -65,6 +65,25 @@ impl FrameAllocator {
         None
     }
 
+    pub fn allocate_contiguous(&mut self, frame_count: u64) -> Option<u64> {
+        if frame_count == 0 {
+            return None;
+        }
+        while self.current_range < self.range_count {
+            let range = &mut self.ranges[self.current_range];
+            let byte_count = frame_count.checked_mul(PAGE_SIZE)?;
+            let allocation_end = range.next.checked_add(byte_count)?;
+            if allocation_end <= range.end {
+                let first_frame = range.next;
+                range.next = allocation_end;
+                self.allocated_frames += frame_count;
+                return Some(first_frame);
+            }
+            self.current_range += 1;
+        }
+        None
+    }
+
     #[must_use]
     pub const fn total_frames(&self) -> u64 {
         self.total_frames
