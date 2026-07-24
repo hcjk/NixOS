@@ -2,6 +2,8 @@
 
 pub const ABI_VERSION: u32 = 1;
 pub const MAX_SYSCALL_ERROR: u64 = 4095;
+pub const PATH_MAX: usize = 256;
+pub const NAME_MAX: usize = 64;
 
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,9 +67,21 @@ pub enum Error {
     NotFound = 2,
     Interrupted = 4,
     Io = 5,
+    NoChild = 10,
+    WouldBlock = 11,
+    OutOfMemory = 12,
+    BadHandle = 9,
+    AlreadyExists = 17,
+    NotDirectory = 20,
+    IsDirectory = 21,
     InvalidArgument = 22,
+    HandleLimit = 24,
+    FileTooLarge = 27,
     NoSpace = 28,
     ReadOnly = 30,
+    NameTooLong = 36,
+    ProcessLimit = 67,
+    MountLimit = 69,
     NotSupported = 95,
     TimedOut = 110,
 }
@@ -77,6 +91,78 @@ impl Error {
     pub const fn as_syscall_result(self) -> i64 {
         -(self as i32 as i64)
     }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenFlags {
+    ReadOnly = 0,
+    WriteOnly = 1,
+    ReadWrite = 2,
+}
+
+pub const OPEN_CREATE: u32 = 1 << 8;
+pub const OPEN_TRUNCATE: u32 = 1 << 9;
+pub const OPEN_DIRECTORY: u32 = 1 << 10;
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SeekWhence {
+    Start = 0,
+    Current = 1,
+    End = 2,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileType {
+    Unknown = 0,
+    Regular = 1,
+    Directory = 2,
+    BlockDevice = 3,
+    CharacterDevice = 4,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FileStat {
+    pub inode: u64,
+    pub size: u64,
+    pub modified_seconds: u64,
+    pub file_type: u32,
+    pub permissions: u16,
+    pub reserved: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectoryEntry {
+    pub inode: u64,
+    pub file_type: u32,
+    pub name_length: u16,
+    pub reserved: u16,
+    pub name: [u8; NAME_MAX],
+}
+
+impl Default for DirectoryEntry {
+    fn default() -> Self {
+        Self {
+            inode: 0,
+            file_type: FileType::Unknown as u32,
+            name_length: 0,
+            reserved: 0,
+            name: [0; NAME_MAX],
+        }
+    }
+}
+
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemInfoSelector {
+    AbiVersion = 0,
+    PageSize = 1,
+    ClockFrequency = 2,
+    ProcessId = 3,
 }
 
 #[repr(C)]
@@ -139,6 +225,8 @@ mod tests {
         assert_eq!(Syscall::try_from(18), Ok(Syscall::Read));
         assert_eq!(Syscall::try_from(999), Err(()));
         assert_eq!(Error::NoSpace.as_syscall_result(), -28);
+        assert_eq!(core::mem::size_of::<DirectoryEntry>(), 80);
+        assert_eq!(core::mem::size_of::<FileStat>(), 32);
     }
 
     #[test]

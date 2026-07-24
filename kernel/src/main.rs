@@ -16,8 +16,10 @@ mod monitor;
 mod paging;
 mod pci;
 mod ps2;
+mod runtime;
 mod serial;
 mod storage;
+mod syscall;
 
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
@@ -81,7 +83,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.6.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.7.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -185,7 +187,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.6.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.7.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -215,11 +217,19 @@ extern "C" fn kernel_main() -> ! {
         cpu.has_apic, cpu.has_nx, cpu.has_sse2
     );
     let interrupt_controller = interrupts::init(platform.as_ref(), &mut paging, &mut allocator);
+    let syscall_ready = syscall::init();
+    let runtime_ready = runtime::init(
+        paging.level_4_frame(),
+        kernel_main as *const () as u64,
+        heap.virtual_start() + heap.size() as u64,
+    );
     let _ = writeln!(
         serial,
-        "interrupts: GDT/TSS/IDT online, {}, PIT 100 Hz, PS/2 keyboard=true, mouse={}",
+        "interrupts: GDT/TSS/IDT online, {}, PIT 100 Hz, PS/2 keyboard=true, mouse={}, syscall={}, runtime={}",
         interrupt_controller.mode.name(),
-        interrupt_controller.mouse_enabled
+        interrupt_controller.mouse_enabled,
+        syscall_ready,
+        runtime_ready
     );
     if let Some(apic) = interrupt_controller.apic {
         let _ = writeln!(
@@ -265,7 +275,7 @@ extern "C" fn kernel_main() -> ! {
             );
         }
     }
-    let _ = writeln!(serial, "milestone 5 ready; entering kernel monitor");
+    let _ = writeln!(serial, "milestone 7 ready; entering kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,

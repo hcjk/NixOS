@@ -1,0 +1,11 @@
+[package]
+name = "nexos-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nexos-abi = { path = "../nexos-abi" }
+
+[lints]
+workspace = true

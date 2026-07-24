@@ -4,7 +4,7 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the first six engineering milestones:
+The repository currently implements the first seven engineering milestones:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -27,10 +27,14 @@ The repository currently implements the first six engineering milestones:
 - bounded partition devices, MBR/GPT validation, and a write-back block cache;
   and
 - a native `no_std` FAT32 reader/writer supporting nested 8.3 directories and
-  files.
+  files;
+- validated x86-64 ELF64 load segments, a fixed-capacity process/handle table,
+  and timer-driven round-robin scheduling;
+- a mount-aware VFS core with canonical path traversal; and
+- a real ring-3 `IRETQ` transition and versioned `SYSCALL`/`SYSRET` entry path.
 
-Processes, the userspace shell, USB, and installation onto physical disks
-remain tracked milestones. See [docs/ROADMAP.md](docs/ROADMAP.md).
+The userspace shell, USB, and installation onto physical disks remain tracked
+milestones. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
 
@@ -103,9 +107,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-qemu.ps1
 
 At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
 `cpuinfo`, `bootinfo`, `acpi`, `lspci`, `lsblk`, `disktest 0`, `uptime`,
-`virtinfo`, `int3`, `clear`, `echo hello`, `reboot`, or `halt`. `disktest` is
-read-only: it reads LBA 0, reports its CRC32, and never writes the disk. This is
-an early kernel monitor; the Unix-like userspace shell is a later milestone.
+`virtinfo`, `ps`, `schedinfo`, `syscalls`, `usertest`,
+`vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `reboot`, or `halt`.
+`usertest` executes a small ring-3 program that queries ABI v1 with `SYSCALL`
+and exits back to the monitor. `disktest` is read-only: it reads LBA 0, reports
+its CRC32, and never writes the disk. The Unix-like userspace shell arrives in
+the next milestone.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

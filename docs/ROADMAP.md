@@ -12,7 +12,8 @@ Legend: **done**, *foundation*, planned.
 5. **MBR/GPT validation, AHCI, IDE, block cache, FAT32**
 6. **NexFS fixed inodes/directories, direct and indirect file blocks,
    allocation, mutation operations, dirty-mount protocol, offline checker**
-7. Processes, ELF loader, syscalls, VFS, scheduler
+7. **Process table, ELF64 loader, SYSCALL/SYSRET, VFS core, timer-driven
+   round-robin scheduler**
 8. Userspace runtime, shell, Unix-like commands
 9. xHCI, USB enumeration, HID, hubs, mass storage
 10. *Safe image tooling*, interactive disk utility and NexOS installer
@@ -67,6 +68,19 @@ Legend: **done**, *foundation*, planned.
 - QEMU BIOS and UEFI tests discover the boot disk through AHCI; legacy `pc`
   emulation discovers the same image through IDE. Both pass a read-only LBA 0
   checksum test and identify the expected MBR partition.
+- Ring-3 test code enters through `IRETQ`, obtains the ABI version through the
+  x86-64 `SYSCALL` entry, exits through the process syscall, and returns to the
+  kernel monitor with interrupt state restored.
+- The fixed-capacity process table tracks parents, current directories,
+  handles, address spaces, exit status, and process limits.
+- The timer-driven scheduler implements round-robin quanta, sleeping, blocking,
+  wait queues, wakeups, exit/reap, and observable scheduling decisions.
+- The ELF64 loader rejects unsupported architectures, invalid bounds,
+  non-user addresses, invalid alignment, and writable-executable segments
+  before presenting validated load segments to an address-space target.
+- The VFS core normalizes absolute and relative paths, resolves `.` and `..`,
+  selects the longest mount prefix, traverses filesystem nodes, and defines
+  file, directory, block-device, and character-device interfaces.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

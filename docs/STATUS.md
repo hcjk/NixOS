@@ -45,6 +45,20 @@ Last verified: 2026-07-24
 - `nexosctl` NexFS image commands for information, checking, listing, file
   import/output, directory creation, rename, truncate, and removal.
 - Safe image-only `nexosctl`; raw physical disks remain intentionally refused.
+- Fixed-capacity process and descriptor tables with parent/child exit and reap
+  semantics.
+- Timer-driven five-tick round-robin scheduler state machine with sleeping,
+  blocking, wakeups, FIFO wait queues, and task exit.
+- Strict little-endian x86-64 ELF64 validation and a validated load-segment
+  target interface.
+- Mount-aware VFS path normalization and traversal with regular-file,
+  directory, block-device, and character-device node types.
+- User GDT segments, TSS ring-0 stack, user page mappings, and a dedicated
+  syscall stack.
+- Versioned x86-64 `SYSCALL`/`SYSRET` entry with negative ABI errors and a real
+  ring-3 `usertest`.
+- Interactive `ps`, `schedinfo`, `syscalls`, `usertest`, and `vfspath`
+  diagnostics.
 
 ## Emulator verification
 
@@ -78,10 +92,18 @@ The host suite passes 23 unit tests, strict Clippy with warnings denied, and a
 custom-target `no_std` NexFS build using `core`, `alloc`, and
 `compiler_builtins`.
 
+The milestone-7 Q35 BIOS test entered a mapped ring-3 program with `IRETQ`.
+That program queried ABI version 1 through `SYSCALL`, issued Exit, returned to
+the saved ring-0 continuation, and continued handling keyboard interrupts.
+The same boot reported the process table, timer-driven scheduler decisions,
+two dispatched syscalls, and canonicalized `/home/../bin` to `/bin`. The host
+suite passes 36 unit tests.
+
 ## Not implemented yet
 
 Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
-ECAM access, power-off through the FADT, SMP, processes, syscalls, VFS mounts,
-userspace, shell, USB, NVMe, FAT32 long-file-name creation, NexFS journaling,
-and physical-disk installation remain later milestones. The current prompt is
-a kernel monitor, not yet the planned Unix-like userspace shell.
+ECAM access, power-off through the FADT, SMP, file-backed kernel VFS mounts,
+general userspace executables, shell, USB, NVMe, FAT32 long-file-name creation,
+NexFS journaling, and physical-disk installation remain later milestones. The
+current prompt is a kernel monitor, not yet the planned Unix-like userspace
+shell.

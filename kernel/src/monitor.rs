@@ -11,8 +11,10 @@ use crate::memory::FrameAllocator;
 use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
 use crate::ps2::{self, Keyboard, Mouse};
+use crate::runtime;
 use crate::serial::SerialPort;
 use crate::storage::{DeviceLocation, PartitionProbe, StorageManager};
+use crate::syscall;
 use nexos_storage::BlockDevice;
 
 const MAX_COMMAND_LENGTH: usize = 128;
@@ -176,8 +178,11 @@ impl<'a> Monitor<'a> {
                 );
                 self.write_line(
                     FOREGROUND,
-                    format_args!("          virtinfo maptest int3 reboot halt echo"),
+                    format_args!(
+                        "          virtinfo maptest ps schedinfo syscalls usertest vfspath"
+                    ),
                 );
+                self.write_line(FOREGROUND, format_args!("          int3 reboot halt echo"));
             }
             b"clear" => {
                 self.console.clear();
@@ -188,7 +193,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.6.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.7.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -289,6 +294,42 @@ impl<'a> Monitor<'a> {
                 }
             }
             b"maptest" => self.test_mapping(),
+            b"ps" => self.print_processes(),
+            b"schedinfo" => {
+                let scheduler = runtime::scheduler_snapshot();
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "scheduler: tasks={}, current={:?}, switches={}, timer decisions={}, quantum=5",
+                        scheduler.tasks,
+                        scheduler.current,
+                        scheduler.context_switches,
+                        scheduler.timer_decisions
+                    ),
+                );
+            }
+            b"syscalls" => {
+                let (count, last, exit_status) = syscall::statistics();
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "syscall ABI v{}, calls={count}, last={last:?}, last exit={exit_status}",
+                        nexos_abi::ABI_VERSION
+                    ),
+                );
+            }
+            b"usertest" => self.test_user_mode(),
+            _ if command.starts_with(b"vfspath ") => {
+                match nexos_runtime::vfs::Path::normalize(&command[8..], b"/") {
+                    Ok(path) => self.write_line(
+                        INFO,
+                        format_args!("VFS normalized path: {}", Ascii(path.as_bytes())),
+                    ),
+                    Err(error) => {
+                        self.write_line(WARNING, format_args!("VFS path rejected: {error:?}"))
+                    }
+                }
+            }
             b"int3" => {
                 self.write_line(MUTED, format_args!("Triggering breakpoint interrupt..."));
                 interrupts::trigger_breakpoint();
@@ -390,6 +431,67 @@ impl<'a> Monitor<'a> {
                 unmapped.is_ok()
             ),
         );
+    }
+
+    fn test_user_mode(&mut self) {
+        let Some(process) = runtime::create_user_process(
+            self.paging.level_4_frame(),
+            0x0000_0000_4000_0000,
+            0x0000_0000_7fff_1000,
+        ) else {
+            self.write_line(WARNING, format_args!("usertest: process table is full"));
+            return;
+        };
+        self.write_line(
+            MUTED,
+            format_args!(
+                "usertest: entering ring 3 as pid {} through IRETQ",
+                process.process.0
+            ),
+        );
+        let result = syscall::run_ring3_self_test(self.paging, self.allocator);
+        let status = result.unwrap_or(-1);
+        let finished = runtime::finish_user_process(process, status as i32);
+        match result {
+            Ok(value) if value == i64::from(nexos_abi::ABI_VERSION) && finished => {
+                self.write_line(
+                    INFO,
+                    format_args!(
+                        "usertest passed: ring 3 -> SYSCALL -> ABI v{value} -> Exit -> ring 0"
+                    ),
+                );
+            }
+            Ok(value) => self.write_line(
+                WARNING,
+                format_args!("usertest returned unexpected status {value}, finalized={finished}"),
+            ),
+            Err(error) => {
+                self.write_line(WARNING, format_args!("usertest setup failed: {error:?}"))
+            }
+        }
+    }
+
+    fn print_processes(&mut self) {
+        let count = runtime::process_count();
+        self.write_line(
+            FOREGROUND,
+            format_args!("PID  PPID  STATE                 ENTRY"),
+        );
+        for index in 0..count {
+            let Some(process) = runtime::process_snapshot(index) else {
+                continue;
+            };
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "{:<4} {:<5} {:<21} {:#x}",
+                    process.id.0,
+                    process.parent.map_or(0, |parent| parent.0),
+                    process.state,
+                    process.entry_point
+                ),
+            );
+        }
     }
 
     fn print_acpi(&mut self) {

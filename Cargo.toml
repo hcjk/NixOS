@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nexos-abi",
+    "crates/nexos-runtime",
     "crates/nexos-storage",
     "crates/nexfs",
     "kernel",
@@ -9,13 +10,14 @@ members = [
 ]
 default-members = [
     "crates/nexos-abi",
+    "crates/nexos-runtime",
     "crates/nexos-storage",
     "crates/nexfs",
     "tools/nexosctl",
 ]
 
 [workspace.package]
-version = "0.6.0-dev"
+version = "0.7.0-dev"
 edition = "2024"
 license = "MIT"
 authors = ["Emilijus"]

@@ -8,6 +8,7 @@ const PAGE_SIZE_BYTES: usize = 4096;
 const ENTRY_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 const PRESENT: u64 = 1;
 const WRITABLE: u64 = 1 << 1;
+const USER_ACCESSIBLE: u64 = 1 << 2;
 const CACHE_DISABLE: u64 = 1 << 4;
 const HUGE_PAGE: u64 = 1 << 7;
 const NO_EXECUTE: u64 = 1 << 63;
@@ -124,10 +125,19 @@ impl PagingInfo {
                     core::ptr::write_bytes(virtual_table as *mut u8, 0, PAGE_SIZE_BYTES);
                 }
                 entry = new_table | PRESENT | WRITABLE;
+                if flags & USER_ACCESSIBLE != 0 {
+                    entry |= USER_ACCESSIBLE;
+                }
                 // SAFETY: This is the inactive child entry being created.
                 unsafe { core::ptr::write_volatile(entry_pointer, entry) };
             } else if entry & HUGE_PAGE != 0 {
                 return Err(PageMapError::HugePageConflict);
+            } else if flags & USER_ACCESSIBLE != 0 && entry & USER_ACCESSIBLE == 0 {
+                entry |= USER_ACCESSIBLE;
+                // SAFETY: Making the page-table level user-traversable does
+                // not expose supervisor leaves; each leaf still enforces its
+                // own U/S bit.
+                unsafe { core::ptr::write_volatile(entry_pointer, entry) };
             }
             table = entry & ENTRY_ADDRESS_MASK;
         }
@@ -175,6 +185,24 @@ impl PagingInfo {
             WRITABLE | NO_EXECUTE,
             allocator,
         )
+    }
+
+    pub fn map_user_page(
+        &mut self,
+        virtual_address: u64,
+        physical_address: u64,
+        writable: bool,
+        executable: bool,
+        allocator: &mut FrameAllocator,
+    ) -> Result<(), PageMapError> {
+        let mut flags = USER_ACCESSIBLE;
+        if writable {
+            flags |= WRITABLE;
+        }
+        if !executable {
+            flags |= NO_EXECUTE;
+        }
+        self.map_page(virtual_address, physical_address, flags, allocator)
     }
 
     pub fn unmap_page(&mut self, virtual_address: u64) -> Result<u64, PageMapError> {

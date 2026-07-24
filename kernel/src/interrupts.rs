@@ -173,7 +173,8 @@ extern "x86-interrupt" fn page_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
-    TICKS.fetch_add(1, Ordering::Relaxed);
+    let tick = TICKS.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    crate::runtime::on_timer_tick(tick);
     // SAFETY: IRQ0 came from the master PIC.
     unsafe { end_of_interrupt(0) };
 }

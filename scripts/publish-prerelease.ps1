@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $manifest = Join-Path $root 'Cargo.toml'
 $releaseWorkflow = Join-Path $root '.github\workflows\prerelease.yml'
+$cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
 
 Push-Location $root
 try {
@@ -23,6 +24,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $releaseWorkflow)) {
         throw 'The GitHub prerelease workflow is missing.'
+    }
+    if (-not (Test-Path -LiteralPath $cargo)) {
+        throw 'Cargo was not found. Run scripts\doctor.ps1 for setup information.'
     }
 
     $tag = "v$version"
@@ -58,11 +62,11 @@ try {
     }
 
     if (-not $SkipChecks) {
-        & cargo test --workspace --exclude nexos-kernel
+        & $cargo test --workspace --exclude nexos-kernel
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }
-        & cargo clippy --all-targets -- -D warnings
+        & $cargo clippy --all-targets -- -D warnings
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }
