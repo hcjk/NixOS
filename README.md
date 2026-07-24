@@ -56,6 +56,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-image.ps1
 The result is `build\nexos.img`, an MBR-partitioned FAT32 disk image containing
 both the Limine BIOS stage and the standard `EFI\BOOT\BOOTX64.EFI` fallback.
 
+To create a BIOS/UEFI ISO for VMware or real x86-64 hardware, install `xorriso`
+and make sure `xorriso.exe` is on `PATH`, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-iso.ps1
+```
+
+This creates `build\nexos.iso`. Attach it to a VM as a virtual CD/DVD, burn it
+to optical media, or write it to a USB drive with a raw-image tool. Disable
+Secure Boot on the target machine. The ISO contains both Limine's legacy BIOS
+El Torito image and its x86-64 UEFI image.
+
 Boot it in QEMU with a graphical framebuffer and serial output:
 
 ```powershell
