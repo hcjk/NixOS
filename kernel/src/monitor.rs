@@ -12,6 +12,8 @@ use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
 use crate::ps2::{self, Keyboard, Mouse};
 use crate::serial::SerialPort;
+use crate::storage::{DeviceLocation, PartitionProbe, StorageManager};
+use nexos_storage::BlockDevice;
 
 const MAX_COMMAND_LENGTH: usize = 128;
 const MAP_TEST_VIRTUAL_ADDRESS: u64 = 0xffff_ff00_0000_0000;
@@ -43,6 +45,7 @@ pub struct Monitor<'a> {
     cpu: &'a CpuInfo,
     platform: Option<&'a PlatformInfo>,
     pci: &'a PciInventory,
+    storage: &'a mut StorageManager,
     controller: ControllerInfo,
     memory_region_count: usize,
     rsdp_address: Option<usize>,
@@ -55,6 +58,7 @@ pub struct MonitorContext<'a> {
     cpu: &'a CpuInfo,
     platform: Option<&'a PlatformInfo>,
     pci: &'a PciInventory,
+    storage: &'a mut StorageManager,
     controller: ControllerInfo,
     boot: BootMetadata,
 }
@@ -68,6 +72,7 @@ impl<'a> MonitorContext<'a> {
         cpu: &'a CpuInfo,
         platform: Option<&'a PlatformInfo>,
         pci: &'a PciInventory,
+        storage: &'a mut StorageManager,
         controller: ControllerInfo,
         boot: BootMetadata,
     ) -> Self {
@@ -78,6 +83,7 @@ impl<'a> MonitorContext<'a> {
             cpu,
             platform,
             pci,
+            storage,
             controller,
             boot,
         }
@@ -102,6 +108,7 @@ impl<'a> Monitor<'a> {
             cpu: context.cpu,
             platform: context.platform,
             pci: context.pci,
+            storage: context.storage,
             controller: context.controller,
             memory_region_count: context.boot.memory_region_count,
             rsdp_address: context.boot.rsdp_address,
@@ -163,7 +170,9 @@ impl<'a> Monitor<'a> {
                 );
                 self.write_line(
                     FOREGROUND,
-                    format_args!("          bootinfo acpi lspci irqinfo mouseinfo uptime"),
+                    format_args!(
+                        "          bootinfo acpi lspci lsblk disktest irqinfo mouseinfo uptime"
+                    ),
                 );
                 self.write_line(
                     FOREGROUND,
@@ -179,7 +188,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.4.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.5.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -232,6 +241,14 @@ impl<'a> Monitor<'a> {
             }
             b"acpi" => self.print_acpi(),
             b"lspci" => self.print_pci(),
+            b"lsblk" => self.print_storage(),
+            _ if command.starts_with(b"disktest ") => {
+                if let Some(index) = parse_decimal(&command[9..]) {
+                    self.test_disk(index);
+                } else {
+                    self.write_line(WARNING, format_args!("usage: disktest <disk-number>"));
+                }
+            }
             b"irqinfo" => self.print_interrupts(),
             b"mouseinfo" => self.print_mouse(),
             b"uptime" => {
@@ -480,6 +497,124 @@ impl<'a> Monitor<'a> {
         }
     }
 
+    fn print_storage(&mut self) {
+        let count = self.storage.count();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "block devices: {count} (AHCI={}, IDE={})",
+                self.storage.ahci_count(),
+                self.storage.ide_count()
+            ),
+        );
+        for index in 0..count {
+            let Some(device) = self.storage.device(index) else {
+                continue;
+            };
+            let sectors = device.sector_count();
+            let sector_size = device.sector_size();
+            let capacity_mib = sectors.saturating_mul(u64::from(sector_size)) / 1024 / 1024;
+            let kind = device.kind_name();
+            let location = device.location();
+            let model_bytes = device.model_bytes();
+            let mut model = [0_u8; 40];
+            let model_length = model_bytes.len().min(model.len());
+            model[..model_length].copy_from_slice(&model_bytes[..model_length]);
+            match location {
+                DeviceLocation::AhciPort { port, version } => self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "disk{index}: {kind}, AHCI {version:#010x} port {port}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        Ascii(&model[..model_length])
+                    ),
+                ),
+                DeviceLocation::IdePosition { slave } => self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "disk{index}: {kind}, IDE {}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        if slave { "slave" } else { "master" },
+                        Ascii(&model[..model_length])
+                    ),
+                ),
+            }
+            match self.storage.probe_partitions(index) {
+                PartitionProbe::None => {
+                    self.write_line(MUTED, format_args!("  no MBR/GPT partition table"));
+                }
+                PartitionProbe::Mbr { entries } => {
+                    let partitions = entries.iter().flatten().count();
+                    self.write_line(
+                        FOREGROUND,
+                        format_args!("  MBR: {partitions} primary partitions"),
+                    );
+                    for (partition_index, partition) in entries.iter().enumerate() {
+                        if let Some(partition) = partition {
+                            self.write_line(
+                                FOREGROUND,
+                                format_args!(
+                                    "    p{}: type={:#04x}, first={}, sectors={}, boot={}",
+                                    partition_index + 1,
+                                    partition.partition_type,
+                                    partition.first_lba,
+                                    partition.sector_count,
+                                    yes_no(partition.bootable)
+                                ),
+                            );
+                        }
+                    }
+                }
+                PartitionProbe::Gpt {
+                    entry_count,
+                    first_usable_lba,
+                    last_usable_lba,
+                } => self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "  GPT valid: {entry_count} slots, usable LBAs {first_usable_lba}-{last_usable_lba}"
+                    ),
+                ),
+                PartitionProbe::Invalid => {
+                    self.write_line(WARNING, format_args!("  invalid partition metadata"));
+                }
+                PartitionProbe::ReadError(error) => {
+                    self.write_line(WARNING, format_args!("  partition read failed: {error:?}"));
+                }
+            }
+        }
+    }
+
+    fn test_disk(&mut self, index: usize) {
+        let Some(device) = self.storage.device_mut(index) else {
+            self.write_line(WARNING, format_args!("disk{index} does not exist"));
+            return;
+        };
+        if device.sector_size() != 512 {
+            self.write_line(
+                WARNING,
+                format_args!("disktest currently supports 512-byte sectors"),
+            );
+            return;
+        }
+        let mut sector = [0_u8; 512];
+        let result = device.read_sectors(0, &mut sector);
+        match result {
+            Ok(()) => {
+                let checksum = nexos_storage::crc32(&sector);
+                let signature = u16::from_le_bytes([sector[510], sector[511]]);
+                self.write_line(
+                    INFO,
+                    format_args!(
+                        "disk{index} read-only test passed: LBA0 CRC32={checksum:#010x}, signature={signature:#06x}"
+                    ),
+                );
+            }
+            Err(error) => self.write_line(
+                WARNING,
+                format_args!("disk{index} read-only test failed: {error:?}"),
+            ),
+        }
+    }
+
     fn print_mouse(&mut self) {
         self.mouse.drain();
         let total = self.mouse.total_events();
@@ -525,4 +660,20 @@ impl fmt::Display for Ascii<'_> {
 
 const fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn parse_decimal(bytes: &[u8]) -> Option<usize> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut value = 0_usize;
+    for byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value
+            .checked_mul(10)?
+            .checked_add(usize::from(*byte - b'0'))?;
+    }
+    Some(value)
 }

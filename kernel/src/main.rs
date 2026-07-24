@@ -3,11 +3,13 @@
 #![feature(abi_x86_interrupt)]
 
 mod acpi;
+mod ahci;
 mod apic;
 mod cpu;
 mod framebuffer;
 mod gdt;
 mod heap;
+mod ide;
 mod interrupts;
 mod memory;
 mod monitor;
@@ -15,6 +17,7 @@ mod paging;
 mod pci;
 mod ps2;
 mod serial;
+mod storage;
 
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
@@ -78,7 +81,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.4.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.5.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -182,7 +185,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.4.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.5.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -229,12 +232,52 @@ extern "C" fn kernel_main() -> ! {
             apic.redirection_entries
         );
     }
-    let _ = writeln!(serial, "milestone 4 ready; entering kernel monitor");
+    let mut storage = storage::StorageManager::discover(&pci, &mut paging, &mut allocator);
+    let _ = writeln!(
+        serial,
+        "storage: {} disks (AHCI={}, IDE={})",
+        storage.count(),
+        storage.ahci_count(),
+        storage.ide_count()
+    );
+    let ahci_probe = storage.ahci_probe();
+    let _ = writeln!(
+        serial,
+        "AHCI probe: controllers={}, BARs={}, ABAR={:#x}, mapped={}, map error={:?}, PI ports={}, SATA ports={}, initialized={}, identify failures={}",
+        ahci_probe.controllers,
+        ahci_probe.bars,
+        ahci_probe.last_abar,
+        ahci_probe.mapped_controllers,
+        ahci_probe.map_error,
+        ahci_probe.implemented_ports,
+        ahci_probe.sata_ports,
+        ahci_probe.initialized_ports,
+        ahci_probe.identify_failures
+    );
+    for index in 0..storage.count() {
+        if let Some(device) = storage.device(index) {
+            let _ = writeln!(
+                serial,
+                "disk{index}: {} sectors x {} bytes ({})",
+                nexos_storage::BlockDevice::sector_count(device),
+                nexos_storage::BlockDevice::sector_size(device),
+                device.kind_name()
+            );
+        }
+    }
+    let _ = writeln!(serial, "milestone 5 ready; entering kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,
         "[ok] GDT/TSS/IDT, {}, PIT, keyboard and mouse IRQs",
         interrupt_controller.mode.name()
+    );
+    let _ = writeln!(
+        console,
+        "[ok] storage: {} disks (AHCI {}, IDE {})",
+        storage.count(),
+        storage.ahci_count(),
+        storage.ide_count()
     );
     console.reset_color();
 
@@ -245,6 +288,7 @@ extern "C" fn kernel_main() -> ! {
         &cpu,
         platform.as_ref(),
         &pci,
+        &mut storage,
         interrupt_controller,
         monitor::BootMetadata::new(memory_map.entries().len(), rsdp_address),
     );

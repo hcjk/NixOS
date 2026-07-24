@@ -200,6 +200,7 @@ version = "0.1.0"
 dependencies = [
  "limine",
  "nexos-abi",
+ "nexos-storage",
  "noto-sans-mono-bitmap",
  "x86_64",
 ]
@@ -207,6 +208,9 @@ dependencies = [
 [[package]]
 name = "nexos-storage"
 version = "0.1.0"
+dependencies = [
+ "fatfs",
+]
 
 [[package]]
 name = "nexosctl"

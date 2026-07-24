@@ -9,7 +9,7 @@ Legend: **done**, *foundation*, planned.
    interrupt-driven PS/2 keyboard, early kernel heap, page-table inspection**
 4. **Virtual mapping/unmapping, reclaiming heap, ACPI RSDT/XSDT/MADT/
    HPET/MCFG discovery, APIC/I/O APIC routing, PCI mechanism 1, PS/2 mouse**
-5. *MBR/GPT validation*, AHCI, IDE, block cache, FAT32
+5. **MBR/GPT validation, AHCI, IDE, block cache, FAT32**
 6. *NexFS format and superblock checking*, full inode/directory implementation
 7. Processes, ELF loader, syscalls, VFS, scheduler
 8. Userspace runtime, shell, Unix-like commands
@@ -45,6 +45,17 @@ Legend: **done**, *foundation*, planned.
 - A scratch virtual page can be mapped, translated, written, unmapped, and
   invalidated; PCI configuration mechanism 1 discovers device functions.
 - IRQ12 mouse packets are decoded into signed motion and button events.
+- PCI AHCI controllers use polling DMA commands for IDENTIFY, LBA28/LBA48
+  reads, writes, and cache flushes, with bounded timeouts and task-file error
+  detection.
+- Legacy PCI IDE controllers use master/slave discovery and polling PIO
+  IDENTIFY, reads, writes, and cache flushes.
+- The shared storage crate provides bounded partition devices, a write-back
+  LRU sector cache, complete primary-MBR/GPT validation, and a native `no_std`
+  FAT32 reader/writer with nested 8.3 directories.
+- QEMU BIOS and UEFI tests discover the boot disk through AHCI; legacy `pc`
+  emulation discovers the same image through IDE. Both pass a read-only LBA 0
+  checksum test and identify the expected MBR partition.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

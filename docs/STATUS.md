@@ -21,8 +21,19 @@ Last verified: 2026-07-24
 - 100 Hz PIT monotonic ticks and uptime reporting.
 - Interrupt-driven i8042 keyboard and three-byte PS/2 mouse packets.
 - PCI configuration mechanism 1 enumeration across all buses and functions.
+- SATA AHCI discovery with DMA IDENTIFY, LBA28/LBA48 reads and writes, cache
+  flush, bounded polling, BIOS handoff, and task-file error reporting.
+- Legacy PCI IDE primary/secondary and master/slave discovery with PIO
+  IDENTIFY, reads, writes, cache flush, and bounded polling.
+- Bounded partition child devices and a generic write-back LRU block cache.
+- Validated primary MBR and GPT headers, entry arrays, CRCs, disk bounds, and
+  partition overlap checks.
+- Native `no_std` FAT32 mount, root/nested directory listing, 8.3 path
+  traversal, file reads, file create/replace, directory creation, mirrored FAT
+  updates, allocation, and flush.
 - Interactive `acpi`, `lspci`, `irqinfo`, `mouseinfo`, `heapinfo`,
-  `heapstats`, `heaptest`, `virtinfo`, and `maptest` diagnostics.
+  `heapstats`, `heaptest`, `virtinfo`, `maptest`, `lsblk`, and read-only
+  `disktest` diagnostics.
 - Combined MBR/FAT32 disk image with BIOS and UEFI Limine boot paths.
 - Host-testable syscall ABI, block-device interfaces, MBR/GPT validation, and
   NexFS v1 superblock formatting/checking.
@@ -30,33 +41,33 @@ Last verified: 2026-07-24
 
 ## Emulator verification
 
-The same milestone-4 kernel booted under QEMU 11.0.0 through legacy BIOS and
-UEFI. BIOS used the ACPI RSDT path; UEFI validated the extended RSDP and XSDT.
-Both selected APIC/I/O APIC interrupt routing and accepted IRQ-driven keyboard
-input while the PIT advanced.
+The milestone-5 kernel booted under QEMU 11.0.0 through Q35 legacy BIOS and
+UEFI. Both paths discovered a 128 MiB QEMU disk through the ICH9 AHCI
+controller, completed ATA IDENTIFY, and reached the monitor. The BIOS path
+then ran `lsblk` and a read-only `disktest 0`:
 
 ```text
-NexOS 0.4.0-dev x86-64
-ACPI: rev 0, 5 tables, root=RSDT, CPUs=1, IOAPIC=true, HPET=true, MCFG=true
-PCI: 6 functions discovered
-interrupts: GDT/TSS/IDT online, APIC/I/O APIC, PIT 100 Hz,
-            PS/2 keyboard=true, mouse=true
-APIC: local id=0 v0x14, IOAPIC id=0 v0x20, redirections=24
-nexos> heaptest
-heap ok: checksum=6112, released=true, reused=true
-nexos> maptest
-maptest: phys=0x183000, translated=0x183000, unmapped=true, passed=true
-nexos> mouseinfo
-mouse events=1, last dx=24, dy=-15, buttons=0b000
+NexOS 0.5.0-dev x86-64
+storage: 1 disks (AHCI=1, IDE=0)
+disk0: 262144 sectors x 512 bytes (sata-ahci)
+nexos> lsblk
+disk0: sata-ahci, AHCI 0x00010000 port 0, 128 MiB,
+       512-byte sectors, QEMU HARDDISK
+  MBR: 1 primary partitions
+    p1: type=0xef, first=2048, sectors=260096, boot=yes
+nexos> disktest 0
+disk0 read-only test passed: LBA0 CRC32=0x557a5a41, signature=0xaa55
 ```
 
-UEFI reported ACPI revision 2 with six XSDT entries and also passed `maptest`
-while PIT uptime and IRQ keyboard input remained active.
+Legacy `pc`/PIIX emulation discovered the same boot image as one IDE PIO disk
+and passed the same LBA 0 CRC32 test. UEFI reported ACPI revision 2 with six
+XSDT entries and mapped its AHCI ABAR at `0x81084000`.
 
 ## Not implemented yet
 
 Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
-ECAM access, power-off through the FADT, SMP, AHCI, IDE, FAT32, full NexFS file
-operations, processes, syscalls, VFS, userspace, shell, USB, and physical-disk
-installation remain later milestones. The current prompt is a kernel monitor,
-not yet the planned Unix-like userspace shell.
+ECAM access, power-off through the FADT, SMP, full NexFS file operations,
+processes, syscalls, VFS mounts, userspace, shell, USB, NVMe, FAT32
+long-file-name creation, and physical-disk installation remain later
+milestones. The current prompt is a kernel monitor, not yet the planned
+Unix-like userspace shell.

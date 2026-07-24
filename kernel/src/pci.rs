@@ -3,6 +3,12 @@ use core::arch::asm;
 const MAX_PCI_DEVICES: usize = 128;
 
 #[derive(Clone, Copy)]
+pub struct PciBar {
+    pub address: u64,
+    pub is_io: bool,
+}
+
+#[derive(Clone, Copy)]
 pub struct PciDevice {
     pub bus: u8,
     pub device: u8,
@@ -52,6 +58,54 @@ impl PciDevice {
             },
             _ => "unknown device",
         }
+    }
+
+    #[must_use]
+    pub fn bar(&self, index: u8) -> Option<PciBar> {
+        if index >= 6 {
+            return None;
+        }
+        let offset = 0x10_u8.checked_add(index.checked_mul(4)?)?;
+        let low = read_config_u32(self.bus, self.device, self.function, offset);
+        if low == 0 || low == u32::MAX {
+            return None;
+        }
+        if low & 1 != 0 {
+            return Some(PciBar {
+                address: u64::from(low & !3),
+                is_io: true,
+            });
+        }
+        let memory_type = (low >> 1) & 3;
+        let is_64_bit = memory_type == 2;
+        let high = if is_64_bit {
+            if index == 5 {
+                return None;
+            }
+            read_config_u32(self.bus, self.device, self.function, offset.checked_add(4)?)
+        } else {
+            0
+        };
+        Some(PciBar {
+            address: (u64::from(high) << 32) | u64::from(low & !0xf),
+            is_io: false,
+        })
+    }
+
+    pub fn enable_memory_bus_mastering(&self) {
+        let command = read_config_u16(self.bus, self.device, self.function, 4);
+        write_config_u16(
+            self.bus,
+            self.device,
+            self.function,
+            4,
+            command | (1 << 1) | (1 << 2),
+        );
+    }
+
+    pub fn enable_io_space(&self) {
+        let command = read_config_u16(self.bus, self.device, self.function, 4);
+        write_config_u16(self.bus, self.device, self.function, 4, command | 1);
     }
 }
 
@@ -155,6 +209,29 @@ fn read_config_u32(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     unsafe {
         outl(0xcf8, address);
         inl(0xcfc)
+    }
+}
+
+fn write_config_u16(bus: u8, device: u8, function: u8, offset: u8, value: u16) {
+    let aligned = offset & 0xfc;
+    let current = read_config_u32(bus, device, function, aligned);
+    let shift = u32::from(offset & 2) * 8;
+    let mask = 0xffff_u32 << shift;
+    let updated = (current & !mask) | (u32::from(value) << shift);
+    write_config_u32(bus, device, function, aligned, updated);
+}
+
+fn write_config_u32(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
+    let address = 0x8000_0000
+        | (u32::from(bus) << 16)
+        | (u32::from(device) << 11)
+        | (u32::from(function) << 8)
+        | u32::from(offset & 0xfc);
+    // SAFETY: PCI configuration mechanism 1 serializes accesses through CF8
+    // and CFC. NexOS is single-core during discovery.
+    unsafe {
+        outl(0xcf8, address);
+        outl(0xcfc, value);
     }
 }
 
