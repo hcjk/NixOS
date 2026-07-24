@@ -35,8 +35,15 @@ Last verified: 2026-07-24
   `heapstats`, `heaptest`, `virtinfo`, `maptest`, `lsblk`, and read-only
   `disktest` diagnostics.
 - Combined MBR/FAT32 disk image with BIOS and UEFI Limine boot paths.
-- Host-testable syscall ABI, block-device interfaces, MBR/GPT validation, and
-  NexFS v1 superblock formatting/checking.
+- Host-testable syscall ABI and block-device interfaces.
+- NexFS v1 fixed-size inodes and directory entries with checksums, nested
+  directories, direct and indirect file blocks, random reads/writes,
+  zero-filled gaps, rename, truncate, and removal.
+- NexFS allocation bitmaps, ordered dirty-mount/clean-unmount protocol, and an
+  offline checker for duplicate or leaked blocks, invalid references,
+  duplicate names, and orphaned inodes.
+- `nexosctl` NexFS image commands for information, checking, listing, file
+  import/output, directory creation, rename, truncate, and removal.
 - Safe image-only `nexosctl`; raw physical disks remain intentionally refused.
 
 ## Emulator verification
@@ -63,11 +70,18 @@ Legacy `pc`/PIIX emulation discovered the same boot image as one IDE PIO disk
 and passed the same LBA 0 CRC32 test. UEFI reported ACPI revision 2 with six
 XSDT entries and mapped its AHCI ABAR at `0x81084000`.
 
+The milestone-6 release kernel and its versioned raw image and hybrid ISO were
+then smoke-tested under QEMU 11.0.0 in four configurations: raw-image BIOS,
+raw-image UEFI, ISO BIOS, and ISO UEFI. Every configuration reached the
+`NexOS 0.6.0-dev x86-64` kernel and initialized the 1280x800x32 framebuffer.
+The host suite passes 23 unit tests, strict Clippy with warnings denied, and a
+custom-target `no_std` NexFS build using `core`, `alloc`, and
+`compiler_builtins`.
+
 ## Not implemented yet
 
 Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
-ECAM access, power-off through the FADT, SMP, full NexFS file operations,
-processes, syscalls, VFS mounts, userspace, shell, USB, NVMe, FAT32
-long-file-name creation, and physical-disk installation remain later
-milestones. The current prompt is a kernel monitor, not yet the planned
-Unix-like userspace shell.
+ECAM access, power-off through the FADT, SMP, processes, syscalls, VFS mounts,
+userspace, shell, USB, NVMe, FAT32 long-file-name creation, NexFS journaling,
+and physical-disk installation remain later milestones. The current prompt is
+a kernel monitor, not yet the planned Unix-like userspace shell.

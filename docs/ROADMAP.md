@@ -10,7 +10,8 @@ Legend: **done**, *foundation*, planned.
 4. **Virtual mapping/unmapping, reclaiming heap, ACPI RSDT/XSDT/MADT/
    HPET/MCFG discovery, APIC/I/O APIC routing, PCI mechanism 1, PS/2 mouse**
 5. **MBR/GPT validation, AHCI, IDE, block cache, FAT32**
-6. *NexFS format and superblock checking*, full inode/directory implementation
+6. **NexFS fixed inodes/directories, direct and indirect file blocks,
+   allocation, mutation operations, dirty-mount protocol, offline checker**
 7. Processes, ELF loader, syscalls, VFS, scheduler
 8. Userspace runtime, shell, Unix-like commands
 9. xHCI, USB enumeration, HID, hubs, mass storage
@@ -53,6 +54,16 @@ Legend: **done**, *foundation*, planned.
 - The shared storage crate provides bounded partition devices, a write-back
   LRU sector cache, complete primary-MBR/GPT validation, and a native `no_std`
   FAT32 reader/writer with nested 8.3 directories.
+- NexFS v1 persists fixed-size inodes and directory entries, supports nested
+  directories plus create/read/write/rename/truncate/remove operations, and
+  addresses files through twelve direct blocks plus one indirect block.
+- NexFS writable mounts mark the volume dirty before changes and only restore
+  the clean flag after ordered flushes; the offline checker rejects dirty
+  volumes, duplicate block ownership, leaked blocks, corrupt entries, and
+  orphaned inodes.
+- `nexosctl` can create and inspect NexFS images and exercise directory, file
+  import, listing, rename, truncate, removal, and consistency-check operations
+  without accepting raw physical-disk paths.
 - QEMU BIOS and UEFI tests discover the boot disk through AHCI; legacy `pc`
   emulation discovers the same image through IDE. Both pass a read-only LBA 0
   checksum test and identify the expected MBR partition.

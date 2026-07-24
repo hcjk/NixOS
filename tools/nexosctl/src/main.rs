@@ -4,6 +4,7 @@ use std::io::{self, Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use nexfs::{FileType, FsError, NexFs};
 use nexos_storage::MemoryBlockDevice;
 
 const MIB: usize = 1024 * 1024;
@@ -27,6 +28,33 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         [command, path] if command == "fs-info" => fs_info(Path::new(path)),
         [command, path] if command == "fs-check" => fs_check(Path::new(path)),
+        [command, image, filesystem_path] if command == "fs-ls" => {
+            fs_ls(Path::new(image), filesystem_path)
+        }
+        [command, image, filesystem_path] if command == "fs-cat" => {
+            fs_cat(Path::new(image), filesystem_path)
+        }
+        [command, image, filesystem_path] if command == "fs-mkdir" => {
+            fs_mkdir(Path::new(image), filesystem_path)
+        }
+        [command, image, filesystem_path] if command == "fs-touch" => {
+            fs_touch(Path::new(image), filesystem_path)
+        }
+        [command, image, filesystem_path] if command == "fs-rm" => {
+            fs_remove(Path::new(image), filesystem_path)
+        }
+        [command, image, source, destination] if command == "fs-mv" => {
+            fs_rename(Path::new(image), source, destination)
+        }
+        [command, image, source, destination] if command == "fs-put" => {
+            fs_put(Path::new(image), Path::new(source), destination)
+        }
+        [command, image, filesystem_path, size] if command == "fs-truncate" => {
+            let size = size
+                .parse::<u64>()
+                .map_err(|_| "size must be an integer number of bytes")?;
+            fs_truncate(Path::new(image), filesystem_path, size)
+        }
         [command, path, flag] if command == "mkfs" && flag == "--yes" => {
             format_existing(Path::new(path))
         }
@@ -207,34 +235,148 @@ fn format_existing(path: &Path) -> Result<(), String> {
 }
 
 fn fs_info(path: &Path) -> Result<(), String> {
-    let superblock = read_superblock(path)?;
+    let report = inspect_filesystem(path)?;
+    let superblock = report.superblock;
     println!("filesystem: NexFS");
     println!("version: {}", superblock.version);
     println!("block size: {}", superblock.block_size);
     println!("blocks: {}", superblock.total_blocks);
     println!("data starts: {}", superblock.data_start_block);
+    println!("inodes: {}", superblock.inode_count().map_err(fs_error)?);
+    println!("allocated inodes: {}", report.allocated_inodes);
+    println!("allocated blocks: {}", report.allocated_blocks);
+    println!("files: {}", report.files);
+    println!("directories: {}", report.directories);
     println!("clean: {}", superblock.is_clean());
     println!("uuid: {}", hex_uuid(superblock.uuid));
     Ok(())
 }
 
 fn fs_check(path: &Path) -> Result<(), String> {
-    let superblock = read_superblock(path)?;
+    let report = inspect_filesystem(path)?;
+    let superblock = report.superblock;
     println!(
-        "{}: clean NexFS v{}, {} blocks",
+        "{}: clean NexFS v{}, {} blocks, {} inodes, {} entries",
         path.display(),
         superblock.version,
-        superblock.total_blocks
+        superblock.total_blocks,
+        report.allocated_inodes,
+        report.directory_entries
     );
     Ok(())
 }
 
-fn read_superblock(path: &Path) -> Result<nexfs::Superblock, String> {
+fn inspect_filesystem(path: &Path) -> Result<nexfs::CheckReport, String> {
     validate_existing_regular_file(path)?;
     let bytes = fs::read(path).map_err(io_error)?;
     let mut disk = MemoryBlockDevice::from_bytes(bytes, 512)
         .map_err(|error| format!("invalid image: {error:?}"))?;
-    nexfs::check(&mut disk).map_err(|error| format!("filesystem check failed: {error:?}"))
+    nexfs::check_detailed(&mut disk).map_err(|error| format!("filesystem check failed: {error:?}"))
+}
+
+fn fs_ls(image: &Path, filesystem_path: &str) -> Result<(), String> {
+    with_filesystem(image, |filesystem| {
+        let entries = filesystem.read_dir(filesystem_path)?;
+        for entry in entries {
+            let kind = match entry.kind {
+                FileType::Directory => 'd',
+                FileType::Regular => '-',
+            };
+            let stat = filesystem.stat(&format!(
+                "{}/{}",
+                filesystem_path.trim_end_matches('/'),
+                entry.name
+            ))?;
+            println!("{kind} {:>10} {:>5} {}", stat.size, entry.inode, entry.name);
+        }
+        Ok(())
+    })
+}
+
+fn fs_cat(image: &Path, filesystem_path: &str) -> Result<(), String> {
+    let contents = with_filesystem(image, |filesystem| {
+        let stat = filesystem.stat(filesystem_path)?;
+        if stat.kind != FileType::Regular {
+            return Err(FsError::IsDirectory);
+        }
+        let length = usize::try_from(stat.size).map_err(|_| FsError::TooLarge)?;
+        let mut contents = vec![0_u8; length];
+        let read = filesystem.read_file(filesystem_path, 0, &mut contents)?;
+        contents.truncate(read);
+        Ok(contents)
+    })?;
+    io::stdout().write_all(&contents).map_err(io_error)
+}
+
+fn fs_mkdir(image: &Path, filesystem_path: &str) -> Result<(), String> {
+    with_filesystem(image, |filesystem| {
+        filesystem.create_dir(filesystem_path)?;
+        Ok(())
+    })
+}
+
+fn fs_touch(image: &Path, filesystem_path: &str) -> Result<(), String> {
+    with_filesystem(image, |filesystem| match filesystem.stat(filesystem_path) {
+        Ok(stat) if stat.kind == FileType::Regular => Ok(()),
+        Ok(_) => Err(FsError::IsDirectory),
+        Err(FsError::NotFound) => {
+            filesystem.create_file(filesystem_path)?;
+            Ok(())
+        }
+        Err(error) => Err(error),
+    })
+}
+
+fn fs_remove(image: &Path, filesystem_path: &str) -> Result<(), String> {
+    with_filesystem(image, |filesystem| filesystem.remove(filesystem_path))
+}
+
+fn fs_rename(image: &Path, source: &str, destination: &str) -> Result<(), String> {
+    with_filesystem(image, |filesystem| filesystem.rename(source, destination))
+}
+
+fn fs_truncate(image: &Path, filesystem_path: &str, size: u64) -> Result<(), String> {
+    with_filesystem(image, |filesystem| {
+        filesystem.truncate(filesystem_path, size)
+    })
+}
+
+fn fs_put(image: &Path, source: &Path, destination: &str) -> Result<(), String> {
+    validate_existing_regular_file(source)?;
+    let contents = fs::read(source).map_err(io_error)?;
+    with_filesystem(image, |filesystem| {
+        match filesystem.stat(destination) {
+            Ok(stat) if stat.kind == FileType::Regular => {
+                filesystem.truncate(destination, 0)?;
+            }
+            Ok(_) => return Err(FsError::IsDirectory),
+            Err(FsError::NotFound) => {
+                filesystem.create_file(destination)?;
+            }
+            Err(error) => return Err(error),
+        }
+        filesystem.write_file(destination, 0, &contents)?;
+        Ok(())
+    })
+}
+
+fn with_filesystem<T>(
+    image: &Path,
+    operation: impl FnOnce(&mut NexFs<'_, MemoryBlockDevice>) -> Result<T, FsError>,
+) -> Result<T, String> {
+    validate_existing_regular_file(image)?;
+    let bytes = fs::read(image).map_err(io_error)?;
+    let mut disk = MemoryBlockDevice::from_bytes(bytes, 512)
+        .map_err(|error| format!("invalid image: {error:?}"))?;
+    let mut filesystem = NexFs::mount(&mut disk).map_err(fs_error)?;
+    let result = operation(&mut filesystem).map_err(fs_error)?;
+    filesystem.unmount().map_err(fs_error)?;
+    fs::write(image, disk.into_bytes()).map_err(io_error)?;
+    Ok(result)
+}
+
+fn fs_error(error: FsError) -> String {
+    format!("NexFS operation failed: {error:?}")
 }
 
 fn validate_image_path(path: &Path) -> Result<(), String> {
@@ -309,6 +451,14 @@ fn usage() -> String {
         "  nexosctl create-image <path> <size-MiB>",
         "  nexosctl fs-info <path>",
         "  nexosctl fs-check <path>",
+        "  nexosctl fs-ls <image> <path>",
+        "  nexosctl fs-cat <image> <path>",
+        "  nexosctl fs-mkdir <image> <path>",
+        "  nexosctl fs-touch <image> <path>",
+        "  nexosctl fs-put <image> <host-file> <path>",
+        "  nexosctl fs-truncate <image> <path> <bytes>",
+        "  nexosctl fs-mv <image> <source> <destination>",
+        "  nexosctl fs-rm <image> <path>",
         "  nexosctl mkfs <existing-image> --yes",
         "  nexosctl boot-image <output> <kernel-elf> <limine-dir> [size-MiB]",
         "",

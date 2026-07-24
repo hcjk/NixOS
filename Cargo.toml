@@ -15,7 +15,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.6.0-dev"
 edition = "2024"
 license = "MIT"
 authors = ["Emilijus"]
@@ -27,4 +27,3 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
-

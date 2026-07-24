@@ -4,11 +4,13 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the first five engineering milestones:
+The repository currently implements the first six engineering milestones:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
-- the NexFS v1 superblock, formatter, and checker;
+- the NexFS v1 formatter, fixed-size inodes, nested directories, direct and
+  indirect file blocks, allocation bitmaps, dirty-mount protocol, and offline
+  consistency checker;
 - a safe disk-image utility (`nexosctl`);
 - a Limine-aware, higher-half `no_std` x86-64 kernel;
 - a physical page-frame allocator built from the Limine memory map;
@@ -40,10 +42,16 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo test
 cargo run -p nexosctl -- create-image build\nexfs.img 64
 cargo run -p nexosctl -- fs-info build\nexfs.img
+cargo run -p nexosctl -- fs-mkdir build\nexfs.img /docs
+cargo run -p nexosctl -- fs-put build\nexfs.img README.md /docs/readme.md
+cargo run -p nexosctl -- fs-ls build\nexfs.img /docs
+cargo run -p nexosctl -- fs-check build\nexfs.img
 ```
 
 `nexosctl` only operates on ordinary image files in this milestone. It refuses
 Windows raw-device paths so an unfinished installer cannot erase a real disk.
+The full NexFS v1 layout and metadata ordering rules are documented in
+[docs/NEXFS.md](docs/NEXFS.md).
 
 ## Kernel build
 
