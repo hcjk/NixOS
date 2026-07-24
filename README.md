@@ -4,7 +4,7 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the first seven engineering milestones:
+The repository currently implements the first eight engineering milestones:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -19,22 +19,26 @@ The repository currently implements the first seven engineering milestones:
 - legacy PIC interrupt routing, a 100 Hz PIT clock, and timer ticks;
 - live four-level page-table inspection through Limine's higher-half map;
 - a readable 24/32-bit framebuffer terminal with scrolling and colors;
-- x86-64 feature detection and COM1 diagnostic logging; and
-- an interrupt-driven PS/2 keyboard with an interactive kernel monitor.
+- x86-64 feature detection and COM1 diagnostic logging;
+- an interrupt-driven PS/2 keyboard with an interactive kernel monitor;
 - ACPI platform discovery, APIC/I/O APIC interrupt routing, PCI enumeration,
   and PS/2 mouse packets;
 - polling SATA AHCI DMA and legacy IDE PIO block drivers;
 - bounded partition devices, MBR/GPT validation, and a write-back block cache;
-  and
 - a native `no_std` FAT32 reader/writer supporting nested 8.3 directories and
   files;
 - validated x86-64 ELF64 load segments, a fixed-capacity process/handle table,
   and timer-driven round-robin scheduling;
 - a mount-aware VFS core with canonical path traversal; and
-- a real ring-3 `IRETQ` transition and versioned `SYSCALL`/`SYSRET` entry path.
+- a real ring-3 `IRETQ` transition and versioned `SYSCALL`/`SYSRET` entry path;
+- a freestanding userspace syscall library and bounded shell parser with
+  quoting, environment expansion, history, pipelines, and redirection; and
+- a 45-command Unix-inspired registry covering file, system, storage, and
+  utility commands.
 
-The userspace shell, USB, and installation onto physical disks remain tracked
-milestones. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Filesystem-backed ring-3 command execution, USB, and installation onto
+physical disks remain tracked milestones. See
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
 
@@ -107,12 +111,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-qemu.ps1
 
 At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
 `cpuinfo`, `bootinfo`, `acpi`, `lspci`, `lsblk`, `disktest 0`, `uptime`,
-`virtinfo`, `ps`, `schedinfo`, `syscalls`, `usertest`,
+`virtinfo`, `ps`, `schedinfo`, `syscalls`, `usertest`, `commands`, `shelltest`,
 `vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `reboot`, or `halt`.
 `usertest` executes a small ring-3 program that queries ABI v1 with `SYSCALL`
 and exits back to the monitor. `disktest` is read-only: it reads LBA 0, reports
-its CRC32, and never writes the disk. The Unix-like userspace shell arrives in
-the next milestone.
+its CRC32, and never writes the disk. The Unix-like shell frontend is present,
+but the filesystem-backed ring-3 shell is not yet the default prompt.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

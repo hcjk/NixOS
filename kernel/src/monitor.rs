@@ -179,10 +179,13 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "          virtinfo maptest ps schedinfo syscalls usertest vfspath"
+                        "          virtinfo maptest ps schedinfo syscalls usertest vfspath commands"
                     ),
                 );
-                self.write_line(FOREGROUND, format_args!("          int3 reboot halt echo"));
+                self.write_line(
+                    FOREGROUND,
+                    format_args!("          shellparse shelltest int3 reboot halt echo"),
+                );
             }
             b"clear" => {
                 self.console.clear();
@@ -193,7 +196,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.7.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.8.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -330,6 +333,11 @@ impl<'a> Monitor<'a> {
                     }
                 }
             }
+            b"commands" => self.print_userspace_commands(),
+            _ if command.starts_with(b"shellparse ") => {
+                self.parse_shell_line(&command[11..]);
+            }
+            b"shelltest" => self.parse_shell_line(b"echo \"$HOME\" | wc -c > /tmp/count"),
             b"int3" => {
                 self.write_line(MUTED, format_args!("Triggering breakpoint interrupt..."));
                 interrupts::trigger_breakpoint();
@@ -491,6 +499,65 @@ impl<'a> Monitor<'a> {
                     process.entry_point
                 ),
             );
+        }
+    }
+
+    fn print_userspace_commands(&mut self) {
+        let commands = nexos_userspace::commands::COMMANDS;
+        self.write_line(
+            FOREGROUND,
+            format_args!("userspace command registry: {} commands", commands.len()),
+        );
+        for command in commands {
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "{:<12} {:?}: {}",
+                    command.name, command.class, command.summary
+                ),
+            );
+        }
+    }
+
+    fn parse_shell_line(&mut self, line: &[u8]) {
+        let mut environment = nexos_userspace::shell::Environment::new();
+        let _ = environment.set(b"HOME", b"/home/root");
+        let parsed = match nexos_userspace::shell::parse(line, &environment) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.write_line(WARNING, format_args!("shell parse error: {error:?}"));
+                return;
+            }
+        };
+        self.write_line(
+            INFO,
+            format_args!(
+                "shell syntax valid: {} pipeline stage(s)",
+                parsed.command_count()
+            ),
+        );
+        for stage_index in 0..parsed.command_count() {
+            let Some(stage) = parsed.command(stage_index) else {
+                continue;
+            };
+            self.write_both(format_args!("  stage {}:", stage_index + 1));
+            for argument_index in 0..stage.argument_count() {
+                let Some(span) = stage.argument(argument_index) else {
+                    continue;
+                };
+                self.write_both(format_args!(" [{}]", Ascii(parsed.bytes(span))));
+            }
+            if let Some(input) = stage.input {
+                self.write_both(format_args!(" < {}", Ascii(parsed.bytes(input))));
+            }
+            if let Some(output) = stage.output {
+                self.write_both(format_args!(
+                    " {} {}",
+                    if output.append { ">>" } else { ">" },
+                    Ascii(parsed.bytes(output.path))
+                ));
+            }
+            self.write_both(format_args!("\n"));
         }
     }
 

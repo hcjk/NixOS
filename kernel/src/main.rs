@@ -83,7 +83,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.7.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.8.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -187,7 +187,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.7.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.8.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -275,7 +275,7 @@ extern "C" fn kernel_main() -> ! {
             );
         }
     }
-    let _ = writeln!(serial, "milestone 7 ready; entering kernel monitor");
+    let _ = writeln!(serial, "milestone 8 ready; entering kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,

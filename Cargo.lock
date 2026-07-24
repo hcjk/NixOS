@@ -185,44 +185,52 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "nexfs"
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 dependencies = [
  "nexos-storage",
 ]
 
 [[package]]
 name = "nexos-abi"
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 
 [[package]]
 name = "nexos-kernel"
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 dependencies = [
  "limine",
  "nexos-abi",
  "nexos-runtime",
  "nexos-storage",
+ "nexos-userspace",
  "noto-sans-mono-bitmap",
  "x86_64",
 ]
 
 [[package]]
 name = "nexos-runtime"
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 dependencies = [
  "nexos-abi",
 ]
 
 [[package]]
 name = "nexos-storage"
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 dependencies = [
  "fatfs",
 ]
 
 [[package]]
+name = "nexos-userspace"
+version = "0.8.0-dev"
+dependencies = [
+ "nexos-abi",
+]
+
+[[package]]
 name = "nexosctl"
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 dependencies = [
  "fatfs",
  "nexfs",

@@ -50,5 +50,7 @@ character devices. It canonicalizes absolute or current-directory-relative
 paths, resolves repeated separators, `.` and `..`, enforces length limits, and
 routes lookups to the longest matching mount prefix.
 
-NexFS/FAT32 kernel mount adapters, executable files from the root filesystem,
-pipelines, and the interactive userspace shell are milestone 8 work.
+Milestone 8 supplies the syscall-facing userspace library, shell syntax,
+pipeline/redirection model, environment, history, and command registry.
+NexFS/FAT32 kernel mount adapters and executable files from the root filesystem
+remain integration work.

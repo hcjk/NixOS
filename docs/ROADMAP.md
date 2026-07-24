@@ -14,7 +14,8 @@ Legend: **done**, *foundation*, planned.
    allocation, mutation operations, dirty-mount protocol, offline checker**
 7. **Process table, ELF64 loader, SYSCALL/SYSRET, VFS core, timer-driven
    round-robin scheduler**
-8. Userspace runtime, shell, Unix-like commands
+8. **`no_std` userspace syscall runtime, shell syntax/environment/history,
+   pipeline/redirection model, and initial Unix-like command registry**
 9. xHCI, USB enumeration, HID, hubs, mass storage
 10. *Safe image tooling*, interactive disk utility and NexOS installer
 11. UEFI/BIOS installation tests, SMP, real-hardware stabilization
@@ -81,6 +82,13 @@ Legend: **done**, *foundation*, planned.
 - The VFS core normalizes absolute and relative paths, resolves `.` and `..`,
   selects the longest mount prefix, traverses filesystem nodes, and defines
   file, directory, block-device, and character-device interfaces.
+- The userspace crate issues the versioned x86-64 syscall convention without a
+  standard library and translates negative kernel results into shared errors.
+- The shell frontend supports single/double quotes, escapes, environment
+  expansion, bounded history, pipelines, input redirection, overwrite/append
+  output redirection, and rejects malformed syntax without partial execution.
+- The initial registry documents 45 built-in, file, system, storage, and
+  utility commands, including `diskutil` and `nex-install`.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

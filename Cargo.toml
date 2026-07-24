@@ -4,6 +4,7 @@ members = [
     "crates/nexos-abi",
     "crates/nexos-runtime",
     "crates/nexos-storage",
+    "crates/nexos-userspace",
     "crates/nexfs",
     "kernel",
     "tools/nexosctl",
@@ -12,12 +13,13 @@ default-members = [
     "crates/nexos-abi",
     "crates/nexos-runtime",
     "crates/nexos-storage",
+    "crates/nexos-userspace",
     "crates/nexfs",
     "tools/nexosctl",
 ]
 
 [workspace.package]
-version = "0.7.0-dev"
+version = "0.8.0-dev"
 edition = "2024"
 license = "MIT"
 authors = ["Emilijus"]

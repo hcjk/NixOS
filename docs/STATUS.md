@@ -59,6 +59,13 @@ Last verified: 2026-07-24
   ring-3 `usertest`.
 - Interactive `ps`, `schedinfo`, `syscalls`, `usertest`, and `vfspath`
   diagnostics.
+- Freestanding userspace syscall wrapper with host-test stubs and shared ABI
+  error decoding.
+- Bounded shell parser with quotes, escapes, environment expansion, eight-stage
+  pipelines, input/output/append redirection, environment storage, and command
+  history.
+- A classified registry of 45 Unix-inspired commands plus `commands`,
+  `shellparse`, and `shelltest` kernel diagnostics.
 
 ## Emulator verification
 
@@ -99,11 +106,15 @@ The same boot reported the process table, timer-driven scheduler decisions,
 two dispatched syscalls, and canonicalized `/home/../bin` to `/bin`. The host
 suite passes 36 unit tests.
 
+The milestone-8 host suite passes 43 tests. BIOS and UEFI QEMU boots execute
+`shelltest`, producing two pipeline stages, expanding `$HOME` to `/home/root`,
+and preserving overwrite redirection to `/tmp/count`.
+
 ## Not implemented yet
 
 Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
 ECAM access, power-off through the FADT, SMP, file-backed kernel VFS mounts,
 general userspace executables, shell, USB, NVMe, FAT32 long-file-name creation,
 NexFS journaling, and physical-disk installation remain later milestones. The
-current prompt is a kernel monitor, not yet the planned Unix-like userspace
-shell.
+shell frontend and command namespace exist, but the current prompt is still a
+kernel monitor rather than the final filesystem-backed ring-3 shell.
