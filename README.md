@@ -82,6 +82,19 @@ to optical media, or write it to a USB drive with a raw-image tool. Disable
 Secure Boot on the target machine. The ISO contains both Limine's legacy BIOS
 El Torito image and its x86-64 UEFI image.
 
+## Publishing a development prerelease
+
+After updating the workspace version and adding matching release notes, run:
+
+```powershell
+.\scripts\publish-prerelease.ps1
+```
+
+The command validates the worktree, runs the host and kernel checks, creates
+and pushes the version tag, and then GitHub Actions publishes the ISO, zipped
+disk image, and SHA-256 checksum file as a prerelease. A browser and GitHub CLI
+are not required.
+
 Boot it in QEMU with a graphical framebuffer and serial output:
 
 ```powershell
