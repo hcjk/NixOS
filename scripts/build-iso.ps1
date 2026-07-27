@@ -1,3 +1,8 @@
+param(
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$ArtifactName = 'nexos'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -5,8 +10,13 @@ $buildDirectory = Join-Path $root 'build'
 $kernel = Join-Path $root 'target\x86_64-nexos\debug\nexos-kernel'
 $limine = Join-Path $root 'vendor\limine\limine-binary'
 $limineTool = Join-Path $limine 'limine-tool-windows-x86\limine.exe'
-$iso = Join-Path $buildDirectory 'nexos.iso'
-$staging = Join-Path $buildDirectory 'iso-root'
+$iso = Join-Path $buildDirectory "$ArtifactName.iso"
+$stagingName = if ($ArtifactName -eq 'nexos') {
+    'iso-root'
+} else {
+    "$ArtifactName-iso-root"
+}
+$staging = Join-Path $buildDirectory $stagingName
 
 $xorrisoCommand = Get-Command xorriso -ErrorAction SilentlyContinue
 $xorrisoCandidates = @(

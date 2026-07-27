@@ -113,8 +113,14 @@ jobs:
           limine="vendor/limine/limine-binary"
           image="build/NexOS-v${VERSION}-x86_64.img"
 
-          cargo run -p nexosctl -- boot-image "$image" "$kernel" "$limine" 128
-          "$limine/limine" bios-install "$image"
+          cargo run -p nexos-installer --bin nex-install -- \
+            --target "$image" \
+            --kernel "$kernel" \
+            --limine "$limine" \
+            --size-mib 128 \
+            --mode combined \
+            --yes \
+            --confirm "$image"
           zip -9 -j "build/NexOS-v${VERSION}-x86_64.zip" "$image"
 
       - name: Build hybrid BIOS and UEFI ISO

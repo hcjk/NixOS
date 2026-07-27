@@ -18,8 +18,10 @@ Legend: **done**, *foundation*, planned.
    pipeline/redirection model, and initial Unix-like command registry**
 9. *xHCI controller/rings, root-port reset, device enumeration, configuration,
    descriptor parsing, and HID/hub/mass-storage protocol cores*
-10. *Safe image tooling*, interactive disk utility and NexOS installer
-11. UEFI/BIOS installation tests, SMP, real-hardware stabilization
+10. **Safe image tooling, interactive disk utility, guided/manual NexOS
+    installer, and BIOS/UEFI installed-image verification**
+11. SMP, live USB class I/O, filesystem-backed userspace, physical-disk
+    installation, and real-hardware stabilization
 
 ## Completed foundation acceptance
 
@@ -99,6 +101,19 @@ Legend: **done**, *foundation*, planned.
 - The reusable `no_std` USB crate validates descriptor chains, enumeration
   transitions, HID boot reports, one-level hub status, xHCI TRB cycle rules,
   and mass-storage BOT/SCSI packets.
+- `diskutil` creates and inspects GPT/MBR image layouts, adds and removes
+  partitions, formats FAT32 and NexFS, and checks supported filesystems.
+- `nex-install` supports guided combined, UEFI, and BIOS layouts plus manual
+  partition selection. Destructive commands require `--yes` and an exact
+  target-name confirmation.
+- Installer writes are prepared and verified in a sibling image before an
+  atomic replacement. Existing manual-mode partitions not selected for
+  formatting remain byte-for-byte intact.
+- The installed GPT image contains a BIOS boot partition, FAT32 ESP, and
+  NexFS root; Limine, the kernel, release metadata, fstab, UUID, checksums, and
+  an install manifest are verified after commit.
+- The Milestone 10 installed image reaches the kernel monitor under QEMU Q35
+  through both legacy BIOS and UEFI firmware.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

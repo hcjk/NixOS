@@ -39,7 +39,8 @@ allocates and frees cluster chains, and flushes metadata. Milestone 5 accepts
 ## Safety boundary
 
 The released monitor exposes only disk inspection and read-only diagnostics.
-Raw Windows device paths remain rejected by `nexosctl`. Write operations are
-available to kernel/filesystem code but are not exposed as destructive monitor
-commands or an installer until the transactional safeguards planned for
-Milestone 10 exist.
+Raw-device paths remain rejected by `nexosctl`, `diskutil`, and `nex-install`.
+Milestone 10 exposes destructive operations only through host-side image tools
+with exact-target confirmation, temporary-image verification, and
+backup/restore commit behavior. They are not yet destructive kernel-monitor
+commands and cannot install directly to a physical disk.

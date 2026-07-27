@@ -4,8 +4,7 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements eight milestones and the Milestone 9 USB
-foundation:
+The repository currently implements Milestones 1 through 10:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -39,9 +38,12 @@ foundation:
 - a polling xHCI controller with firmware handoff, DMA command/event rings,
   root-port reset, USB device addressing/configuration, descriptor-based class
   discovery, and tested HID, hub, and mass-storage protocol primitives.
+- safe image-only `diskutil` and `nex-install` executables with GPT/MBR
+  editing, FAT32/NexFS formatting, guided and manual installs, exact-target
+  confirmation, transactional replacement, and post-install verification.
 
 Live USB class endpoint I/O, filesystem-backed ring-3 command execution, and
-installation onto physical disks remain tracked milestones. See
+installation onto physical disks remain tracked work. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -60,10 +62,32 @@ cargo run -p nexosctl -- fs-ls build\nexfs.img /docs
 cargo run -p nexosctl -- fs-check build\nexfs.img
 ```
 
-`nexosctl` only operates on ordinary image files in this milestone. It refuses
-Windows raw-device paths so an unfinished installer cannot erase a real disk.
+All storage tools only operate on ordinary image files in this milestone. They
+refuse raw-device paths so an unfinished installer cannot erase a real disk.
 The full NexFS v1 layout and metadata ordering rules are documented in
 [docs/NEXFS.md](docs/NEXFS.md).
+
+## Disk utility and installer
+
+Create, inspect, format, and check a combined BIOS/UEFI disk image:
+
+```powershell
+cargo run -p nexos-installer --bin diskutil -- guided build\disk.img combined 128 --yes --confirm build\disk.img
+cargo run -p nexos-installer --bin diskutil -- inspect build\disk.img
+cargo run -p nexos-installer --bin diskutil -- format build\disk.img 3 nexfs --yes --confirm build\disk.img
+cargo run -p nexos-installer --bin diskutil -- check build\disk.img 3
+```
+
+Install and verify NexOS on an image:
+
+```powershell
+cargo run -p nexos-installer --bin nex-install -- --target build\installed.img --kernel target\x86_64-nexos\debug\nexos-kernel --limine vendor\limine\limine-binary --mode combined --yes --confirm build\installed.img
+cargo run -p nexos-installer --bin nex-install -- verify build\installed.img
+```
+
+Run either executable without arguments for its interactive workflow. See
+[docs/INSTALLER.md](docs/INSTALLER.md) for guided/manual modes and safety
+behavior.
 
 ## Kernel build
 
@@ -79,8 +103,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch-limine.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-image.ps1
 ```
 
-The result is `build\nexos.img`, an MBR-partitioned FAT32 disk image containing
-both the Limine BIOS stage and the standard `EFI\BOOT\BOOTX64.EFI` fallback.
+The result is `build\nexos.img`, a verified GPT image containing a BIOS boot
+partition, FAT32 EFI System Partition, NexFS root, Limine BIOS stage, and the
+standard `EFI\BOOT\BOOTX64.EFI` fallback.
 
 To create a BIOS/UEFI ISO for VMware or real x86-64 hardware, install `xorriso`
 and make sure `xorriso.exe` is on `PATH`, then run:

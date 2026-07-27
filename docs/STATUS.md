@@ -80,6 +80,16 @@ Last verified: 2026-07-28
 - A reusable `no_std` USB library covering descriptor validation,
   enumeration states, xHCI TRB rings, HID boot keyboard/mouse reports,
   one-level hub descriptors/status, and mass-storage BOT/SCSI commands.
+- Image-only `diskutil` workflows for GPT/MBR layout creation and inspection,
+  partition creation/deletion, FAT32/NexFS formatting, and filesystem checks.
+- Guided combined BIOS/UEFI, UEFI-only, and BIOS-only `nex-install` modes,
+  plus manual ESP/root selection that preserves unrelated partitions.
+- Exact-target destructive confirmation, raw-device refusal, sibling-image
+  preparation, backup/restore commit, installed-file checks, NexFS checking,
+  and UUID verification.
+- A combined installed image with a GPT BIOS boot partition, FAT32 EFI System
+  Partition, NexFS root, Limine BIOS/UEFI files, kernel, fstab, release data,
+  and install manifest.
 
 ## Emulator verification
 
@@ -130,6 +140,12 @@ addressed, and configured devices. An isolated mass-storage run identifies
 VID/PID `46f4:0001`, USB 3.0, one mass-storage interface, and two bulk
 endpoints; repeated No-Op commands complete successfully.
 
+The milestone-10 installer suite adds seven focused safety, layout, formatting,
+preservation, and verification tests. A real guided install using the release
+kernel and Limine completes post-commit verification, then boots from its GPT
+disk through both QEMU Q35 legacy BIOS and UEFI. Both paths discover the
+installed 128 MiB disk through AHCI and reach the interactive kernel monitor.
+
 ## Not implemented yet
 
 Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
@@ -139,4 +155,5 @@ hub enumeration, USB mass-storage block transfers, hotplug, NVMe, FAT32
 long-file-name creation, NexFS journaling, and physical-disk installation
 remain later work. The shell frontend and command namespace exist, but the
 current prompt is still a kernel monitor rather than the final
-filesystem-backed ring-3 shell.
+filesystem-backed ring-3 shell. Milestone 10 therefore exposes `diskutil` and
+`nex-install` as host-side image tools; raw disks remain deliberately refused.
