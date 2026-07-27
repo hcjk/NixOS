@@ -12,7 +12,7 @@ try {
         -p nexos-kernel `
         --target (Join-Path $root 'kernel\x86_64-nexos.json') `
         -Z json-target-spec `
-        -Z build-std=core,compiler_builtins `
+        -Z build-std=core,alloc,compiler_builtins `
         -Z build-std-features=compiler-builtins-mem `
         -- `
         -C "link-arg=-Tkernel/linker.ld"

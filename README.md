@@ -4,7 +4,8 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements Milestones 1 through 10:
+The repository currently implements the Milestone 11 hardware-installer
+preview:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -14,7 +15,7 @@ The repository currently implements Milestones 1 through 10:
 - a safe disk-image utility (`nexosctl`);
 - a Limine-aware, higher-half `no_std` x86-64 kernel;
 - a physical page-frame allocator built from the Limine memory map;
-- a 256 KiB early kernel heap backed by contiguous physical frames;
+- a 16 MiB global kernel allocator backed by contiguous physical frames;
 - GDT/TSS and IDT exception handling with a dedicated double-fault stack;
 - legacy PIC interrupt routing, a 100 Hz PIT clock, and timer ticks;
 - live four-level page-table inspection through Limine's higher-half map;
@@ -40,10 +41,13 @@ The repository currently implements Milestones 1 through 10:
   discovery, and tested HID, hub, and mass-storage protocol primitives.
 - safe image-only `diskutil` and `nex-install` executables with GPT/MBR
   editing, FAT32/NexFS formatting, guided and manual installs, exact-target
-  confirmation, transactional replacement, and post-install verification.
+  confirmation, transactional replacement, and post-install verification; and
+- in-kernel `diskutil` inspection/planning plus a destructive, exactly
+  confirmed `nex-install` path for 512-byte-sector AHCI/IDE disks on UEFI
+  x86-64 hardware.
 
 Live USB class endpoint I/O, filesystem-backed ring-3 command execution, and
-installation onto physical disks remain tracked work. See
+legacy-BIOS installation from inside NexOS remain tracked work. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -62,8 +66,9 @@ cargo run -p nexosctl -- fs-ls build\nexfs.img /docs
 cargo run -p nexosctl -- fs-check build\nexfs.img
 ```
 
-All storage tools only operate on ordinary image files in this milestone. They
-refuse raw-device paths so an unfinished installer cannot erase a real disk.
+The Windows/Linux host tools only operate on ordinary image files and refuse
+raw-device paths. The installer embedded in the release ISO can write a
+physical AHCI or IDE disk after an exact `ERASE-diskN` confirmation.
 The full NexFS v1 layout and metadata ordering rules are documented in
 [docs/NEXFS.md](docs/NEXFS.md).
 
@@ -88,6 +93,22 @@ cargo run -p nexos-installer --bin nex-install -- verify build\installed.img
 Run either executable without arguments for its interactive workflow. See
 [docs/INSTALLER.md](docs/INSTALLER.md) for guided/manual modes and safety
 behavior.
+
+From the NexOS release ISO, the equivalent real-disk UEFI workflow is:
+
+```text
+nexos> lsblk
+nexos> diskutil inspect disk0
+nexos> diskutil plan disk0
+nexos> nex-install disk0 ERASE-disk0
+nexos> diskutil verify disk0
+```
+
+Replace `disk0` with the exact target shown by `lsblk`. The install command
+erases the whole selected disk. It refuses non-512-byte-sector disks, disks
+smaller than 128 MiB, the detected live boot disk, missing installer payloads,
+and incomplete confirmation tokens. This release installs a UEFI boot path;
+Secure Boot must be disabled.
 
 ## Kernel build
 
@@ -147,6 +168,7 @@ At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
 and exits back to the monitor. `disktest` is read-only: it reads LBA 0, reports
 its CRC32, and never writes the disk. The Unix-like shell frontend is present,
 but the filesystem-backed ring-3 shell is not yet the default prompt.
+The monitor accepts input from PS/2/i8042 keyboards and COM1.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

@@ -1,15 +1,62 @@
 # NexOS disk utility and installer
 
-Milestone 10 provides two host-side Rust executables for safe development and
-virtual-machine disk images:
+## Install from the NexOS release ISO
+
+Milestone 11 adds a guided installer directly to the NexOS kernel monitor. It
+targets modern x86-64 UEFI machines with Secure Boot disabled, an AHCI or
+legacy IDE target disk, and 512-byte logical sectors. The disk must be at least
+128 MiB.
+
+Boot the release ISO, then inspect every detected disk:
+
+```text
+nexos> lsblk
+nexos> diskutil inspect disk0
+nexos> diskutil plan disk0
+```
+
+The plan prints the exact target, capacity, and partitions that will be
+created. To accept complete destruction of that disk, enter the exact command
+it prints:
+
+```text
+nexos> nex-install disk0 ERASE-disk0
+```
+
+Do not copy that example without checking `lsblk`; the correct target may be
+`disk1` or another number. A successful install ends with
+`NexOS installation verified`. An optional second read-back is:
+
+```text
+nexos> diskutil verify disk0
+```
+
+Remove the ISO and reboot in UEFI mode. The installed fallback loader is
+`EFI/BOOT/BOOTX64.EFI`.
+
+The in-OS safety checks refuse a partial/mismatched confirmation, the detected
+live boot disk, missing installer payloads, unsupported sector sizes,
+undersized devices, malformed writes, and failed read-back verification. The
+release ISO carries its kernel and UEFI loader as read-only Limine modules;
+ordinary installed boots intentionally omit the loader module and cannot start
+another destructive install.
+
+The in-OS installer is whole-disk and UEFI-only. It does not preserve or resize
+partitions, install legacy-BIOS stages, support NVMe/USB mass-storage/RAID/4Kn
+targets, or provide rollback after writes begin.
+
+## Host image tools
+
+Milestone 10 also provides two host-side Rust executables for safe development
+and virtual-machine disk images:
 
 - `diskutil` creates, inspects, partitions, formats, and checks images.
 - `nex-install` installs a bootable NexOS system into an image.
 
-They do not yet run inside the ring-3 NexOS shell and they deliberately reject
-raw devices such as `\\.\PhysicalDrive0`, `\\.\GLOBALROOT\...`, `/dev/sda`, and
-`/dev/nvme0n1`. Physical-disk installation remains disabled until the kernel
-has filesystem-backed userspace and stronger mounted-device/active-I/O checks.
+These host executables deliberately reject raw devices such as
+`\\.\PhysicalDrive0`, `\\.\GLOBALROOT\...`, `/dev/sda`, and `/dev/nvme0n1`.
+Physical-disk installation is available only through the guarded in-OS UEFI
+workflow above.
 
 ## Safety model
 

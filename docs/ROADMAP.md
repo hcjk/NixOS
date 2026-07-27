@@ -20,8 +20,8 @@ Legend: **done**, *foundation*, planned.
    descriptor parsing, and HID/hub/mass-storage protocol cores*
 10. **Safe image tooling, interactive disk utility, guided/manual NexOS
     installer, and BIOS/UEFI installed-image verification**
-11. SMP, live USB class I/O, filesystem-backed userspace, physical-disk
-    installation, and real-hardware stabilization
+11. *UEFI physical-disk installation, global allocator, serial-console input,
+    native FAT32 formatting/LFN boot configuration, and hardware safeguards*
 
 ## Completed foundation acceptance
 
@@ -114,7 +114,22 @@ Legend: **done**, *foundation*, planned.
   an install manifest are verified after commit.
 - The Milestone 10 installed image reaches the kernel monitor under QEMU Q35
   through both legacy BIOS and UEFI firmware.
+- The Milestone 11 release ISO embeds its running kernel and UEFI loader as
+  read-only Limine payloads. `diskutil` previews a three-partition GPT layout,
+  and `nex-install diskN ERASE-diskN` writes FAT32/NexFS filesystems, installs
+  the UEFI fallback loader and kernel, flushes every layer, and verifies the
+  installed bytes before success.
+- A disposable 256 MiB AHCI disk was installed from the UEFI ISO, verified
+  again with `diskutil verify`, detached from the ISO, and booted back to the
+  NexOS monitor through its installed `EFI/BOOT/BOOTX64.EFI`.
+- Installed systems omit the UEFI installer module, preventing an ordinary
+  installed boot from becoming a self-erasing installation environment.
+- COM1 is now an input as well as diagnostic console, and the kernel uses a
+  16 MiB coalescing global allocator for filesystem and installer operations.
 
-The complete v1 described in the product plan is a long-running systems project.
-Every milestone must retain host tests and QEMU smoke tests before real disks or
-hardware are enabled.
+The complete v1 described in the product plan is a long-running systems
+project. Physical hardware support in Milestone 11 is deliberately limited to
+UEFI, AHCI/legacy IDE, 512-byte logical sectors, framebuffer output, and
+PS/2/i8042 or COM1 input. SMP, live USB HID/mass-storage transfers, NVMe,
+legacy-BIOS installation from NexOS, and filesystem-backed ring-3 userspace
+remain later stabilization work.

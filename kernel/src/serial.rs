@@ -29,6 +29,15 @@ impl SerialPort {
         }
         unsafe { outb(self.base, byte) };
     }
+
+    pub fn read_byte(&mut self) -> Option<u8> {
+        if unsafe { inb(self.base + 5) } & 0x01 == 0 {
+            return None;
+        }
+
+        let byte = unsafe { inb(self.base) };
+        Some(if byte == b'\r' { b'\n' } else { byte })
+    }
 }
 
 impl fmt::Write for SerialPort {

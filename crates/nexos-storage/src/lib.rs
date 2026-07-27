@@ -10,12 +10,18 @@ extern crate std;
 mod cache;
 #[cfg(feature = "alloc")]
 mod fat32;
+mod installer;
 mod partition;
 
 #[cfg(feature = "alloc")]
 pub use cache::{CacheStats, CachedBlockDevice};
 #[cfg(feature = "alloc")]
-pub use fat32::{Fat32, Fat32Info, FatDirectoryEntry};
+pub use fat32::{Fat32, Fat32Info, FatDirectoryEntry, format_fat32};
+pub use installer::{
+    BIOS_BOOT_TYPE_GUID, ESP_TYPE_GUID, InstallerGuids, InstallerLayout, NEXFS_TYPE_GUID,
+    PartitionSpan, guided_installer_layout, verify_guided_installer_gpt,
+    write_guided_installer_gpt,
+};
 pub use partition::{GptHeader, Guid, MbrPartition, PartitionDevice, parse_gpt_header, parse_mbr};
 #[cfg(feature = "alloc")]
 pub use partition::{Partition, PartitionTable, PartitionTableKind, read_partition_table};

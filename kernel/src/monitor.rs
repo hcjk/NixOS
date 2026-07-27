@@ -4,7 +4,8 @@ use core::fmt::{self, Write};
 use crate::acpi::PlatformInfo;
 use crate::cpu::CpuInfo;
 use crate::framebuffer::{ACCENT, Color, Console, FOREGROUND, INFO, MUTED, WARNING};
-use crate::heap::KernelHeap;
+use crate::heap;
+use crate::installer::{self, InstallPayload};
 use crate::interrupts;
 use crate::interrupts::ControllerInfo;
 use crate::memory::FrameAllocator;
@@ -16,7 +17,9 @@ use crate::serial::SerialPort;
 use crate::storage::{DeviceLocation, PartitionProbe, StorageManager};
 use crate::syscall;
 use crate::usb::UsbManager;
-use nexos_storage::BlockDevice;
+use nexos_storage::{
+    BIOS_BOOT_TYPE_GUID, BlockDevice, ESP_TYPE_GUID, NEXFS_TYPE_GUID, read_partition_table,
+};
 
 const MAX_COMMAND_LENGTH: usize = 128;
 const MAP_TEST_VIRTUAL_ADDRESS: u64 = 0xffff_ff00_0000_0000;
@@ -43,13 +46,13 @@ pub struct Monitor<'a> {
     keyboard: Keyboard,
     mouse: Mouse,
     allocator: &'a mut FrameAllocator,
-    heap: &'a mut KernelHeap,
     paging: &'a mut PagingInfo,
     cpu: &'a CpuInfo,
     platform: Option<&'a PlatformInfo>,
     pci: &'a PciInventory,
     usb: &'a mut UsbManager,
     storage: &'a mut StorageManager,
+    install_payload: InstallPayload,
     controller: ControllerInfo,
     memory_region_count: usize,
     rsdp_address: Option<usize>,
@@ -57,13 +60,13 @@ pub struct Monitor<'a> {
 
 pub struct MonitorContext<'a> {
     allocator: &'a mut FrameAllocator,
-    heap: &'a mut KernelHeap,
     paging: &'a mut PagingInfo,
     cpu: &'a CpuInfo,
     platform: Option<&'a PlatformInfo>,
     pci: &'a PciInventory,
     usb: &'a mut UsbManager,
     storage: &'a mut StorageManager,
+    install_payload: InstallPayload,
     controller: ControllerInfo,
     boot: BootMetadata,
 }
@@ -72,25 +75,25 @@ impl<'a> MonitorContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         allocator: &'a mut FrameAllocator,
-        heap: &'a mut KernelHeap,
         paging: &'a mut PagingInfo,
         cpu: &'a CpuInfo,
         platform: Option<&'a PlatformInfo>,
         pci: &'a PciInventory,
         usb: &'a mut UsbManager,
         storage: &'a mut StorageManager,
+        install_payload: InstallPayload,
         controller: ControllerInfo,
         boot: BootMetadata,
     ) -> Self {
         Self {
             allocator,
-            heap,
             paging,
             cpu,
             platform,
             pci,
             usb,
             storage,
+            install_payload,
             controller,
             boot,
         }
@@ -110,13 +113,13 @@ impl<'a> Monitor<'a> {
             keyboard: Keyboard::new(),
             mouse: Mouse::new(),
             allocator: context.allocator,
-            heap: context.heap,
             paging: context.paging,
             cpu: context.cpu,
             platform: context.platform,
             pci: context.pci,
             usb: context.usb,
             storage: context.storage,
+            install_payload: context.install_payload,
             controller: context.controller,
             memory_region_count: context.boot.memory_region_count,
             rsdp_address: context.boot.rsdp_address,
@@ -126,7 +129,7 @@ impl<'a> Monitor<'a> {
     pub fn run(&mut self) -> ! {
         self.write_line(
             INFO,
-            format_args!("Interactive PS/2 kernel monitor is ready."),
+            format_args!("Interactive PS/2 and COM1 kernel monitor is ready."),
         );
         self.write_line(MUTED, format_args!("Type 'help' and press Enter."));
 
@@ -137,7 +140,11 @@ impl<'a> Monitor<'a> {
             let mut command = [0_u8; MAX_COMMAND_LENGTH];
             let mut length = 0;
             loop {
-                if let Some(character) = self.keyboard.read_character() {
+                if let Some(character) = self
+                    .keyboard
+                    .read_character()
+                    .or_else(|| self.serial.read_byte())
+                {
                     match character {
                         b'\n' => {
                             self.write_both(format_args!("\n"));
@@ -179,7 +186,7 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "          bootinfo acpi lspci lsusb usbinfo usbtest lsblk disktest"
+                        "          bootinfo acpi lspci lsusb usbinfo usbtest lsblk disktest diskutil"
                     ),
                 );
                 self.write_line(
@@ -191,9 +198,10 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "          usertest vfspath commands shellparse shelltest int3 reboot halt echo"
+                        "          nex-install usertest vfspath commands shellparse shelltest"
                     ),
                 );
+                self.write_line(FOREGROUND, format_args!("          int3 reboot halt echo"));
             }
             b"clear" => {
                 self.console.clear();
@@ -204,7 +212,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.10.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.11.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -215,28 +223,8 @@ impl<'a> Monitor<'a> {
                     self.allocator.allocated_frames()
                 ),
             ),
-            b"heapinfo" => self.write_line(
-                FOREGROUND,
-                format_args!(
-                    "heap: used={}/{}, free={}, largest={}, active={}, peak={}",
-                    self.heap.used(),
-                    self.heap.size(),
-                    self.heap.free_bytes(),
-                    self.heap.largest_free_block(),
-                    self.heap.active_allocations(),
-                    self.heap.peak_used()
-                ),
-            ),
-            b"heapstats" => self.write_line(
-                FOREGROUND,
-                format_args!(
-                    "heap: virt={:#x}, phys={:#x}, allocs={}, frees={}",
-                    self.heap.virtual_start(),
-                    self.heap.physical_start(),
-                    self.heap.total_allocations(),
-                    self.heap.deallocations()
-                ),
-            ),
+            b"heapinfo" => self.print_heap_info(),
+            b"heapstats" => self.print_heap_stats(),
             b"heaptest" => self.test_heap(),
             b"cpuinfo" => self.write_line(
                 FOREGROUND,
@@ -261,6 +249,42 @@ impl<'a> Monitor<'a> {
             b"usbinfo" => self.print_usb_info(),
             b"usbtest" => self.test_usb(),
             b"lsblk" => self.print_storage(),
+            b"diskutil" => self.print_diskutil_help(),
+            _ if command.starts_with(b"diskutil inspect ") => {
+                if let Some(index) = parse_disk_name(&command[17..]) {
+                    self.print_disk_selection(index);
+                } else {
+                    self.write_line(
+                        WARNING,
+                        format_args!("usage: diskutil inspect disk<number>"),
+                    );
+                }
+            }
+            _ if command.starts_with(b"diskutil plan ") => {
+                if let Some(index) = parse_disk_name(&command[14..]) {
+                    self.print_install_plan(index);
+                } else {
+                    self.write_line(WARNING, format_args!("usage: diskutil plan disk<number>"));
+                }
+            }
+            _ if command.starts_with(b"diskutil verify ") => {
+                if let Some(index) = parse_disk_name(&command[16..]) {
+                    self.verify_installed_disk(index);
+                } else {
+                    self.write_line(WARNING, format_args!("usage: diskutil verify disk<number>"));
+                }
+            }
+            b"nex-install" => self.print_installer_help(),
+            _ if command.starts_with(b"nex-install ") => {
+                if let Some(index) = parse_install_arguments(&command[12..]) {
+                    self.install_disk(index);
+                } else {
+                    self.write_line(
+                        WARNING,
+                        format_args!("usage: nex-install disk<number> ERASE-disk<number>"),
+                    );
+                }
+            }
             _ if command.starts_with(b"disktest ") => {
                 if let Some(index) = parse_decimal(&command[9..]) {
                     self.test_disk(index);
@@ -386,31 +410,50 @@ impl<'a> Monitor<'a> {
     }
 
     fn test_heap(&mut self) {
-        let Some(allocation) = self.heap.allocate(64, 16) else {
+        let Some((first_address, checksum, released, reused)) = heap::self_test() else {
             self.write_line(WARNING, format_args!("heap allocation failed"));
             return;
-        };
-        let mut checksum = 0_u64;
-        for index in 0_u8..64 {
-            let value = index.wrapping_mul(3).wrapping_add(1);
-            // SAFETY: The heap returned a live 64-byte allocation and index is
-            // restricted to that allocation.
-            unsafe { allocation.as_ptr().add(usize::from(index)).write(value) };
-            checksum += u64::from(value);
-        }
-        let first_address = allocation.as_ptr() as usize;
-        let released = self.heap.deallocate(allocation);
-        let reused = if let Some(second) = self.heap.allocate(64, 16) {
-            let same_address = second.as_ptr() as usize == first_address;
-            let _ = self.heap.deallocate(second);
-            same_address
-        } else {
-            false
         };
         self.write_line(
             INFO,
             format_args!(
                 "heap ok: address={first_address:#x}, checksum={checksum}, released={released}, reused={reused}"
+            ),
+        );
+    }
+
+    fn print_heap_info(&mut self) {
+        let Some(stats) = heap::stats() else {
+            self.write_line(WARNING, format_args!("global heap is unavailable"));
+            return;
+        };
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "heap: used={}/{}, free={}, largest={}, active={}, peak={}",
+                stats.used,
+                stats.size,
+                stats.free_bytes,
+                stats.largest_free_block,
+                stats.active_allocations,
+                stats.peak_used
+            ),
+        );
+    }
+
+    fn print_heap_stats(&mut self) {
+        let Some(stats) = heap::stats() else {
+            self.write_line(WARNING, format_args!("global heap is unavailable"));
+            return;
+        };
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "heap: virt={:#x}, phys={:#x}, allocs={}, frees={}",
+                stats.virtual_start,
+                stats.physical_start,
+                stats.total_allocations,
+                stats.deallocations
             ),
         );
     }
@@ -915,6 +958,292 @@ impl<'a> Monitor<'a> {
         }
     }
 
+    fn print_diskutil_help(&mut self) {
+        self.write_line(
+            FOREGROUND,
+            format_args!("diskutil inspect disk<number>  - inspect detected disks"),
+        );
+        self.write_line(
+            FOREGROUND,
+            format_args!("diskutil plan disk<number>     - preview guided UEFI layout"),
+        );
+        self.write_line(
+            FOREGROUND,
+            format_args!("diskutil verify disk<number>   - verify an installed NexOS disk"),
+        );
+        self.write_line(
+            MUTED,
+            format_args!("Use lsblk for all disks. Partition resizing is not supported."),
+        );
+    }
+
+    fn print_disk_selection(&mut self, index: usize) {
+        let Some(device) = self.storage.device(index) else {
+            self.write_line(WARNING, format_args!("disk{index} does not exist"));
+            return;
+        };
+        let sectors = device.sector_count();
+        let sector_size = device.sector_size();
+        let capacity_mib = sectors.saturating_mul(u64::from(sector_size)) / 1024 / 1024;
+        let kind = device.kind_name();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "disk{index}: {kind}, {capacity_mib} MiB, {sectors} sectors x {sector_size}"
+            ),
+        );
+        match self.storage.probe_partitions(index) {
+            PartitionProbe::None => {
+                self.write_line(MUTED, format_args!("  no MBR/GPT partition table"));
+            }
+            PartitionProbe::Mbr { entries } => self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "  MBR: {} primary partition(s)",
+                    entries.iter().flatten().count()
+                ),
+            ),
+            PartitionProbe::Gpt {
+                entry_count,
+                first_usable_lba,
+                last_usable_lba,
+            } => self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "  GPT: {entry_count} slots, usable {first_usable_lba}-{last_usable_lba}"
+                ),
+            ),
+            PartitionProbe::Invalid => {
+                self.write_line(WARNING, format_args!("  invalid partition metadata"));
+            }
+            PartitionProbe::ReadError(error) => {
+                self.write_line(WARNING, format_args!("  partition read failed: {error:?}"));
+            }
+        }
+
+        let Some(device) = self.storage.device_mut(index) else {
+            return;
+        };
+        let table = match read_partition_table(device) {
+            Ok(table) => table,
+            Err(error) => {
+                self.write_line(
+                    WARNING,
+                    format_args!("  full partition inspection failed: {error:?}"),
+                );
+                return;
+            }
+        };
+        for partition in table.partitions {
+            let role = match partition.type_guid {
+                Some(BIOS_BOOT_TYPE_GUID) => "BIOS boot",
+                Some(ESP_TYPE_GUID) => "EFI system",
+                Some(NEXFS_TYPE_GUID) => "NexFS root",
+                Some(_) => "GPT data",
+                None => "MBR partition",
+            };
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "  p{}: {role}, LBA {} +{}, name='{}'",
+                    partition.index, partition.first_lba, partition.sector_count, partition.name
+                ),
+            );
+        }
+    }
+
+    fn print_install_plan(&mut self, index: usize) {
+        let Some(device) = self.storage.device(index) else {
+            self.write_line(WARNING, format_args!("disk{index} does not exist"));
+            return;
+        };
+        let sector_size = device.sector_size();
+        let sectors = device.sector_count();
+        if sector_size != 512 {
+            self.write_line(
+                WARNING,
+                format_args!("disk{index}: installer requires 512-byte sectors"),
+            );
+            return;
+        }
+        let Some(device) = self.storage.device_mut(index) else {
+            return;
+        };
+        match installer::is_boot_device(device, self.install_payload.source) {
+            Ok(true) => {
+                self.write_line(
+                    WARNING,
+                    format_args!("disk{index} is the live boot disk and cannot be erased"),
+                );
+                return;
+            }
+            Err(error) => {
+                self.write_line(
+                    WARNING,
+                    format_args!("cannot identify live boot disk: {}", error.message()),
+                );
+                return;
+            }
+            Ok(false) => {}
+        }
+        let layout =
+            nexos_storage::guided_installer_layout(sectors, nexos_storage::Guid::default());
+        match layout {
+            Ok(layout) => {
+                self.write_line(
+                    WARNING,
+                    format_args!("GUIDED INSTALL WILL ERASE ALL DATA ON disk{index}"),
+                );
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "  p1 BIOS reserve: LBA {} +{}",
+                        layout.bios.first_lba, layout.bios.sector_count
+                    ),
+                );
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "  p2 FAT32 ESP:    LBA {} +{}",
+                        layout.esp.first_lba, layout.esp.sector_count
+                    ),
+                );
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "  p3 NexFS root:   LBA {} +{}",
+                        layout.root.first_lba, layout.root.sector_count
+                    ),
+                );
+                self.write_line(
+                    INFO,
+                    format_args!("To commit exactly: nex-install disk{index} ERASE-disk{index}"),
+                );
+            }
+            Err(error) => self.write_line(
+                WARNING,
+                format_args!("disk{index} cannot use the guided layout: {error:?}"),
+            ),
+        }
+    }
+
+    fn print_installer_help(&mut self) {
+        self.write_line(
+            FOREGROUND,
+            format_args!("1. Run lsblk and diskutil inspect disk<number>"),
+        );
+        self.write_line(
+            FOREGROUND,
+            format_args!("2. Run diskutil plan disk<number> and review every partition"),
+        );
+        self.write_line(
+            FOREGROUND,
+            format_args!("3. Type the exact ERASE token printed by the plan"),
+        );
+        self.write_line(
+            WARNING,
+            format_args!("Milestone 11 installs to UEFI x86-64 hardware only."),
+        );
+        if !self.install_payload.ready() {
+            self.write_line(
+                WARNING,
+                format_args!("installer payload missing; boot the NexOS release ISO"),
+            );
+        }
+    }
+
+    fn install_disk(&mut self, index: usize) {
+        if !self.install_payload.ready() {
+            self.write_line(
+                WARNING,
+                format_args!("installer payload missing; boot the NexOS release ISO"),
+            );
+            return;
+        }
+        let Some(device) = self.storage.device(index) else {
+            self.write_line(WARNING, format_args!("disk{index} does not exist"));
+            return;
+        };
+        let capacity_mib = device
+            .sector_count()
+            .saturating_mul(u64::from(device.sector_size()))
+            / 1024
+            / 1024;
+        self.write_line(
+            WARNING,
+            format_args!("ERASING disk{index} ({capacity_mib} MiB). This cannot be undone."),
+        );
+        self.write_line(
+            MUTED,
+            format_args!("Writing GPT, FAT32 ESP, NexFS root, kernel, and UEFI loader..."),
+        );
+        let payload = self.install_payload;
+        let result = self
+            .storage
+            .device_mut(index)
+            .ok_or(installer::InstallerError::UnsupportedDisk)
+            .and_then(|device| installer::install(device, payload));
+        match result {
+            Ok(report) => {
+                self.write_line(
+                    INFO,
+                    format_args!(
+                        "NexOS installation verified: kernel={} bytes CRC32={:#010x}",
+                        report.kernel_bytes, report.kernel_crc32
+                    ),
+                );
+                self.write_line(
+                    INFO,
+                    format_args!(
+                        "disk{index}: ESP p2 at {}, NexFS p3 at {}; reboot into UEFI firmware",
+                        report.layout.esp.first_lba, report.layout.root.first_lba
+                    ),
+                );
+            }
+            Err(error) => self.write_line(
+                WARNING,
+                format_args!("installation failed on disk{index}: {}", error.message()),
+            ),
+        }
+    }
+
+    fn verify_installed_disk(&mut self, index: usize) {
+        if !self.install_payload.ready() {
+            self.write_line(
+                WARNING,
+                format_args!("verification payload missing; boot the NexOS release ISO"),
+            );
+            return;
+        }
+        let payload = self.install_payload;
+        let result = self
+            .storage
+            .device_mut(index)
+            .ok_or(installer::InstallerError::UnsupportedDisk)
+            .and_then(|device| installer::verify_existing(device, payload));
+        match result {
+            Ok(report) => self.write_line(
+                INFO,
+                format_args!(
+                    "disk{index} verified: {} kernel bytes, CRC32={:#010x}, NexFS UUID prefix={:02x}{:02x}{:02x}{:02x}",
+                    report.kernel_bytes,
+                    report.kernel_crc32,
+                    report.root_uuid[0],
+                    report.root_uuid[1],
+                    report.root_uuid[2],
+                    report.root_uuid[3]
+                ),
+            ),
+            Err(error) => self.write_line(
+                WARNING,
+                format_args!(
+                    "disk{index} verification failed: {}",
+                    error.message()
+                ),
+            ),
+        }
+    }
+
     fn test_disk(&mut self, index: usize) {
         let Some(device) = self.storage.device_mut(index) else {
             self.write_line(WARNING, format_args!("disk{index} does not exist"));
@@ -1019,4 +1348,21 @@ fn parse_decimal(bytes: &[u8]) -> Option<usize> {
             .checked_add(usize::from(*byte - b'0'))?;
     }
     Some(value)
+}
+
+fn parse_disk_name(bytes: &[u8]) -> Option<usize> {
+    parse_decimal(bytes.strip_prefix(b"disk")?)
+}
+
+fn parse_install_arguments(bytes: &[u8]) -> Option<usize> {
+    let separator = bytes.iter().position(|byte| *byte == b' ')?;
+    let target = &bytes[..separator];
+    let confirmation = &bytes[separator + 1..];
+    if target.is_empty()
+        || confirmation.strip_prefix(b"ERASE-")? != target
+        || confirmation.contains(&b' ')
+    {
+        return None;
+    }
+    parse_disk_name(target)
 }

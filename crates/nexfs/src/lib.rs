@@ -234,22 +234,23 @@ pub fn format<D: BlockDevice>(device: &mut D, uuid: [u8; 16]) -> Result<Superblo
     set_bitmap_bit(&mut inode_bitmap, superblock.root_inode, true)?;
     device.write_sectors(inode_bitmap_block * sectors_per_block, &inode_bitmap)?;
 
-    let bitmap_bytes = usize::try_from(block_bitmap_blocks)
-        .ok()
-        .and_then(|blocks| blocks.checked_mul(BLOCK_SIZE))
-        .ok_or(FsError::TooLarge)?;
-    let mut block_bitmap = vec![0_u8; bitmap_bytes];
-    for block in 0..data_start_block {
-        set_bitmap_bit(&mut block_bitmap, block, true)?;
-    }
+    let mut block_bitmap = vec![0_u8; BLOCK_SIZE];
     for index in 0..block_bitmap_blocks {
-        let start = usize::try_from(index)
-            .map_err(|_| FsError::TooLarge)?
-            .checked_mul(BLOCK_SIZE)
+        block_bitmap.fill(0);
+        let first_bit = index
+            .checked_mul(BITMAP_BITS_PER_BLOCK)
             .ok_or(FsError::TooLarge)?;
+        let reserved_end = data_start_block.min(
+            first_bit
+                .checked_add(BITMAP_BITS_PER_BLOCK)
+                .ok_or(FsError::TooLarge)?,
+        );
+        for block in first_bit..reserved_end {
+            set_bitmap_bit(&mut block_bitmap, block - first_bit, true)?;
+        }
         device.write_sectors(
             (block_bitmap_block + index) * sectors_per_block,
-            &block_bitmap[start..start + BLOCK_SIZE],
+            &block_bitmap,
         )?;
     }
 
@@ -266,6 +267,32 @@ pub fn format<D: BlockDevice>(device: &mut D, uuid: [u8; 16]) -> Result<Superblo
 
 pub fn check<D: BlockDevice>(device: &mut D) -> Result<Superblock, FsError> {
     Ok(check_detailed(device)?.superblock)
+}
+
+pub fn inspect_superblock<D: BlockDevice>(device: &mut D) -> Result<Superblock, FsError> {
+    let superblock = read_superblock(device)?;
+    if !superblock.is_clean() {
+        return Err(FsError::Dirty);
+    }
+    let available_blocks = device_bytes(device)? / BLOCK_SIZE_U64;
+    if superblock.total_blocks > available_blocks {
+        return Err(FsError::InvalidLayout);
+    }
+    let mut inode_bitmap = vec![0_u8; BLOCK_SIZE];
+    read_block(
+        device,
+        &superblock,
+        superblock.inode_bitmap_block,
+        &mut inode_bitmap,
+    )?;
+    if !bitmap_bit(&inode_bitmap, 0)? || !bitmap_bit(&inode_bitmap, superblock.root_inode)? {
+        return Err(FsError::InvalidLayout);
+    }
+    let root = read_inode(device, &superblock, superblock.root_inode)?;
+    if root.kind != FileType::Directory {
+        return Err(FsError::InvalidLayout);
+    }
+    Ok(superblock)
 }
 
 #[allow(clippy::too_many_lines)]

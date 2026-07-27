@@ -6,12 +6,12 @@ Last verified: 2026-07-28
 
 - Freestanding, higher-half x86-64 Rust kernel.
 - Limine memory-map, HHDM, framebuffer, and ACPI RSDP requests.
-- COM1 serial diagnostics and a color framebuffer terminal.
+- Bidirectional COM1 monitor/diagnostics and a color framebuffer terminal.
 - Physical frame allocation with the first 1 MiB reserved.
 - Four-level x86-64 page translation plus 4 KiB map/unmap primitives.
 - Uncached MMIO mappings for the local APIC and I/O APIC.
-- A 512 KiB physical-frame-backed heap with aligned variable-size allocation,
-  deallocation, adjacent-free-block coalescing, and reuse.
+- A 16 MiB physical-frame-backed `GlobalAlloc` heap with aligned variable-size
+  allocation, deallocation, adjacent-free-block coalescing, and reuse.
 - GDT, 64-bit TSS, IDT exception handlers, and a dedicated double-fault stack.
 - ACPI 1.0 RSDT and ACPI 2.0+ XSDT parsing with checksum validation.
 - MADT processor, local-APIC, I/O-APIC, and interrupt-override discovery.
@@ -90,6 +90,16 @@ Last verified: 2026-07-28
 - A combined installed image with a GPT BIOS boot partition, FAT32 EFI System
   Partition, NexFS root, Limine BIOS/UEFI files, kernel, fstab, release data,
   and install manifest.
+- Native FAT32 creation inside `no_std` NexOS, including the long
+  `limine.conf` boot filename used by the installer.
+- Limine installer payload discovery for the running kernel and
+  `BOOTX64.EFI`, including boot-source metadata used to refuse the live disk.
+- In-kernel `diskutil inspect`, `diskutil plan`, and `diskutil verify`
+  commands for detected storage devices.
+- A guided in-kernel `nex-install diskN ERASE-diskN` workflow that creates a
+  protective MBR plus primary/backup GPT, a BIOS-reserved partition, a 64 MiB
+  FAT32 ESP, and a NexFS root, then verifies GPT CRCs, boot files, kernel CRC,
+  configuration, and root UUID.
 
 ## Emulator verification
 
@@ -146,14 +156,26 @@ kernel and Limine completes post-commit verification, then boots from its GPT
 disk through both QEMU Q35 legacy BIOS and UEFI. Both paths discover the
 installed 128 MiB disk through AHCI and reach the interactive kernel monitor.
 
+The milestone-11 storage suite passes 22 focused NexFS and storage tests,
+including native FAT32 formatting/LFN creation and guided GPT write/verify. A
+UEFI release ISO carrying the kernel and `BOOTX64.EFI` installed a disposable
+256 MiB AHCI disk using the exact in-OS command
+`nex-install disk0 ERASE-disk0`. `diskutil verify disk0` independently
+validated the result. After removing the ISO, QEMU firmware loaded
+`EFI/BOOT/BOOTX64.EFI` from that disk and NexOS 0.11.0-dev returned to the
+monitor.
+
 ## Not implemented yet
 
-Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
-ECAM access, power-off through the FADT, SMP, file-backed kernel VFS mounts,
-general userspace executables, shell, live USB HID interrupt input, downstream
-hub enumeration, USB mass-storage block transfers, hotplug, NVMe, FAT32
-long-file-name creation, NexFS journaling, and physical-disk installation
-remain later work. The shell frontend and command namespace exist, but the
-current prompt is still a kernel monitor rather than the final
-filesystem-backed ring-3 shell. Milestone 10 therefore exposes `diskutil` and
-`nex-install` as host-side image tools; raw disks remain deliberately refused.
+Page-table frame reclamation, HPET clock use, PCI ECAM access, power-off
+through the FADT, SMP, file-backed kernel VFS mounts, general userspace
+executables, a filesystem-backed shell, live USB HID interrupt input,
+downstream hub enumeration, USB mass-storage block transfers, hotplug, NVMe,
+general FAT32 long-file-name creation, and NexFS journaling remain later work.
+
+The in-OS installer is a deliberately narrow real-hardware preview: UEFI
+x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI or legacy IDE,
+whole-disk guided layout, and PS/2/i8042 or COM1 input. It does not install the
+Limine legacy-BIOS stages, preserve partitions, resize filesystems, drive USB
+storage, detect software RAID, or support NVMe/4Kn targets. The host-side tools
+still refuse raw disks.

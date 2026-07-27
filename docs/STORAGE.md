@@ -38,9 +38,14 @@ allocates and frees cluster chains, and flushes metadata. Milestone 5 accepts
 
 ## Safety boundary
 
-The released monitor exposes only disk inspection and read-only diagnostics.
-Raw-device paths remain rejected by `nexosctl`, `diskutil`, and `nex-install`.
-Milestone 10 exposes destructive operations only through host-side image tools
-with exact-target confirmation, temporary-image verification, and
-backup/restore commit behavior. They are not yet destructive kernel-monitor
-commands and cannot install directly to a physical disk.
+Host-side `nexosctl`, `diskutil`, and `nex-install` continue to reject raw
+device paths and operate only on image files. The Milestone 11 release ISO
+contains a separate in-kernel guided installer for detected AHCI and IDE
+devices. It requires the exact target name and an `ERASE-diskN` token, refuses
+the detected boot disk, writes a new GPT/FAT32/NexFS layout, flushes it, and
+reads the installed payload back before reporting success.
+
+The in-kernel path is whole-disk and UEFI-only. It supports 512-byte logical
+sectors and does not resize or preserve existing partitions. NVMe, USB
+mass-storage transfers, hotplug, RAID, 4Kn media, and legacy-BIOS stage
+installation from inside NexOS remain outside this release.

@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
+#![feature(alloc_error_handler)]
+
+extern crate alloc;
 
 mod acpi;
 mod ahci;
@@ -10,6 +13,7 @@ mod framebuffer;
 mod gdt;
 mod heap;
 mod ide;
+mod installer;
 mod interrupts;
 mod memory;
 mod monitor;
@@ -26,7 +30,10 @@ mod xhci;
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use limine::request::{FramebufferRequest, HhdmRequest, MemmapRequest, RsdpRequest};
+use limine::request::{
+    ExecutableFileRequest, FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest,
+    RsdpRequest,
+};
 use limine::{BaseRevision, RequestsEndMarker, RequestsStartMarker};
 
 #[used]
@@ -52,6 +59,14 @@ static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
+
+#[used]
+#[unsafe(link_section = ".requests")]
+static EXECUTABLE_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
+
+#[used]
+#[unsafe(link_section = ".requests")]
+static MODULES_REQUEST: ModulesRequest = ModulesRequest::new();
 
 #[used]
 #[unsafe(link_section = ".requests_end_marker")]
@@ -85,13 +100,28 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.10.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.11.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
         let _ = writeln!(serial, "fatal: unsupported Limine base revision");
         halt();
     }
+
+    let executable = EXECUTABLE_FILE_REQUEST
+        .response()
+        .map(|response| response.executable_file());
+    let modules = MODULES_REQUEST
+        .response()
+        .map_or(&[][..], |response| response.modules());
+    let install_payload = installer::InstallPayload::from_bootloader(executable, modules);
+    let _ = writeln!(
+        serial,
+        "installer payload: kernel={} bytes, BOOTX64.EFI={}, ready={}",
+        install_payload.kernel.len(),
+        install_payload.boot_x64.map_or(0, <[u8]>::len),
+        install_payload.ready()
+    );
 
     let Some(memory_map) = MEMORY_MAP_REQUEST.response() else {
         let _ = writeln!(serial, "fatal: bootloader supplied no memory map");
@@ -115,7 +145,7 @@ extern "C" fn kernel_main() -> ! {
         );
         halt();
     };
-    let Some(mut heap) = heap::KernelHeap::initialize(&mut allocator, hhdm_offset) else {
+    let Some(heap_stats) = heap::initialize_global(&mut allocator, hhdm_offset) else {
         let _ = writeln!(serial, "fatal: unable to reserve the kernel heap");
         halt();
     };
@@ -125,8 +155,8 @@ extern "C" fn kernel_main() -> ! {
         "paging: CR3 {:#x}, HHDM {:#x}, heap {:#x} ({} KiB)",
         paging.level_4_frame(),
         paging.hhdm_offset(),
-        heap.virtual_start(),
-        heap.size() / 1024
+        heap_stats.virtual_start,
+        heap_stats.size / 1024
     );
 
     let rsdp_address = RSDP_REQUEST
@@ -189,7 +219,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.10.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.11.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -200,7 +230,7 @@ extern "C" fn kernel_main() -> ! {
          [ok] {} memory regions, {} MiB usable\n\
          [ok] ACPI RSDP at {:#x}\n\
          [ok] framebuffer {}\n\
-         [ok] 512 KiB reclaiming kernel heap\n\
+         [ok] {} MiB reclaiming global kernel heap\n\
          [ok] ACPI platform tables and PCI scan",
         memory_map.entries().len(),
         allocator.usable_mebibytes(),
@@ -209,7 +239,8 @@ extern "C" fn kernel_main() -> ! {
             "online"
         } else {
             "serial-only"
-        }
+        },
+        heap_stats.size / 1024 / 1024
     );
 
     let cpu = cpu::CpuInfo::detect();
@@ -223,7 +254,7 @@ extern "C" fn kernel_main() -> ! {
     let runtime_ready = runtime::init(
         paging.level_4_frame(),
         kernel_main as *const () as u64,
-        heap.virtual_start() + heap.size() as u64,
+        heap_stats.virtual_start + heap_stats.size as u64,
     );
     let _ = writeln!(
         serial,
@@ -294,7 +325,7 @@ extern "C" fn kernel_main() -> ! {
     }
     let _ = writeln!(
         serial,
-        "milestone 10 safe installer ready; entering kernel monitor"
+        "milestone 11 hardware installer ready; entering kernel monitor"
     );
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
@@ -321,13 +352,13 @@ extern "C" fn kernel_main() -> ! {
 
     let context = monitor::MonitorContext::new(
         &mut allocator,
-        &mut heap,
         &mut paging,
         &cpu,
         platform.as_ref(),
         &pci,
         &mut usb,
         &mut storage,
+        install_payload,
         interrupt_controller,
         monitor::BootMetadata::new(memory_map.entries().len(), rsdp_address),
     );
@@ -339,6 +370,11 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     let _ = writeln!(serial, "\nKERNEL PANIC: {info}");
     halt()
+}
+
+#[alloc_error_handler]
+fn allocation_error(layout: core::alloc::Layout) -> ! {
+    panic!("kernel allocation failed: {layout:?}")
 }
 
 fn halt() -> ! {

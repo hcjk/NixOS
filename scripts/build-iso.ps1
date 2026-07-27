@@ -78,6 +78,8 @@ timeout: 0
 /NexOS
     protocol: limine
     path: boot():/boot/nexos-kernel
+    module_path: boot():/EFI/BOOT/BOOTX64.EFI
+    module_string: nexos-bootx64
 '@
 Set-Content -LiteralPath (Join-Path $staging 'limine.conf') `
     -Value $configuration -Encoding Ascii

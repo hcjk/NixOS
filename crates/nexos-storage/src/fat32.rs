@@ -12,6 +12,10 @@ const ATTR_DIRECTORY: u8 = 0x10;
 const ATTR_ARCHIVE: u8 = 0x20;
 const ATTR_LONG_NAME: u8 = 0x0f;
 const ATTR_VOLUME_ID: u8 = 0x08;
+const FAT_COUNT: u8 = 2;
+const RESERVED_SECTORS: u16 = 32;
+const ROOT_CLUSTER: u32 = 2;
+const FORMAT_CHUNK_SECTORS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fat32Info {
@@ -54,6 +58,140 @@ pub struct Fat32<D> {
     root_cluster: u32,
     first_data_sector: u32,
     total_clusters: u32,
+}
+
+pub fn format_fat32<D: BlockDevice>(
+    device: &mut D,
+    volume_id: u32,
+) -> Result<Fat32Info, StorageError> {
+    let bytes_per_sector =
+        usize::try_from(device.sector_size()).map_err(|_| StorageError::TooLarge)?;
+    if bytes_per_sector != 512 {
+        return Err(StorageError::UnsupportedSectorSize);
+    }
+    let total_sectors = u32::try_from(device.sector_count()).map_err(|_| StorageError::TooLarge)?;
+    let (sectors_per_cluster, sectors_per_fat, total_clusters) =
+        choose_format_geometry(total_sectors, bytes_per_sector)?;
+
+    let mut sector = vec![0_u8; bytes_per_sector];
+    sector[0..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
+    sector[3..11].copy_from_slice(b"NEXOS   ");
+    let bytes_per_sector_u16 =
+        u16::try_from(bytes_per_sector).map_err(|_| StorageError::TooLarge)?;
+    sector[11..13].copy_from_slice(&bytes_per_sector_u16.to_le_bytes());
+    sector[13] = sectors_per_cluster;
+    sector[14..16].copy_from_slice(&RESERVED_SECTORS.to_le_bytes());
+    sector[16] = FAT_COUNT;
+    sector[21] = 0xf8;
+    sector[24..26].copy_from_slice(&63_u16.to_le_bytes());
+    sector[26..28].copy_from_slice(&255_u16.to_le_bytes());
+    sector[32..36].copy_from_slice(&total_sectors.to_le_bytes());
+    sector[36..40].copy_from_slice(&sectors_per_fat.to_le_bytes());
+    sector[44..48].copy_from_slice(&ROOT_CLUSTER.to_le_bytes());
+    sector[48..50].copy_from_slice(&1_u16.to_le_bytes());
+    sector[50..52].copy_from_slice(&6_u16.to_le_bytes());
+    sector[64] = 0x80;
+    sector[66] = 0x29;
+    sector[67..71].copy_from_slice(&volume_id.to_le_bytes());
+    sector[71..82].copy_from_slice(b"NEXOS BOOT ");
+    sector[82..90].copy_from_slice(b"FAT32   ");
+    sector[510..512].copy_from_slice(&crate::MBR_SIGNATURE);
+    device.write_sectors(0, &sector)?;
+    device.write_sectors(6, &sector)?;
+
+    sector.fill(0);
+    sector[0..4].copy_from_slice(&0x4161_5252_u32.to_le_bytes());
+    sector[484..488].copy_from_slice(&0x6141_7272_u32.to_le_bytes());
+    sector[488..492].copy_from_slice(&(total_clusters - 1).to_le_bytes());
+    sector[492..496].copy_from_slice(&3_u32.to_le_bytes());
+    sector[508..512].copy_from_slice(&0xaa55_0000_u32.to_le_bytes());
+    device.write_sectors(1, &sector)?;
+    device.write_sectors(7, &sector)?;
+
+    let zero_bytes = bytes_per_sector
+        .checked_mul(FORMAT_CHUNK_SECTORS)
+        .ok_or(StorageError::TooLarge)?;
+    let zeros = vec![0_u8; zero_bytes];
+    zero_range(
+        device,
+        u64::from(RESERVED_SECTORS),
+        u64::from(FAT_COUNT) * u64::from(sectors_per_fat) + u64::from(sectors_per_cluster),
+        &zeros,
+    )?;
+
+    sector.fill(0);
+    sector[0..4].copy_from_slice(&0x0fff_fff8_u32.to_le_bytes());
+    sector[4..8].copy_from_slice(&0xffff_ffff_u32.to_le_bytes());
+    sector[8..12].copy_from_slice(&FAT_EOC.to_le_bytes());
+    for fat in 0..FAT_COUNT {
+        let first_fat_sector =
+            u64::from(RESERVED_SECTORS) + u64::from(fat) * u64::from(sectors_per_fat);
+        device.write_sectors(first_fat_sector, &sector)?;
+    }
+    device.flush()?;
+    Ok(Fat32Info {
+        bytes_per_sector: 512,
+        sectors_per_cluster,
+        total_sectors,
+        sectors_per_fat,
+        root_cluster: ROOT_CLUSTER,
+        total_clusters,
+    })
+}
+
+fn choose_format_geometry(
+    total_sectors: u32,
+    bytes_per_sector: usize,
+) -> Result<(u8, u32, u32), StorageError> {
+    for sectors_per_cluster in [1_u8, 2, 4, 8, 16, 32, 64, 128] {
+        let possible_data = total_sectors
+            .checked_sub(u32::from(RESERVED_SECTORS))
+            .ok_or(StorageError::UnsupportedFilesystem)?;
+        let maximum_clusters = possible_data / u32::from(sectors_per_cluster);
+        let fat_bytes = u64::from(maximum_clusters + 2) * 4;
+        let sectors_per_fat = u32::try_from(
+            fat_bytes
+                .div_ceil(u64::try_from(bytes_per_sector).map_err(|_| StorageError::TooLarge)?),
+        )
+        .map_err(|_| StorageError::TooLarge)?;
+        let overhead = u32::from(RESERVED_SECTORS)
+            .checked_add(u32::from(FAT_COUNT) * sectors_per_fat)
+            .ok_or(StorageError::TooLarge)?;
+        let data_sectors = total_sectors
+            .checked_sub(overhead)
+            .ok_or(StorageError::UnsupportedFilesystem)?;
+        let clusters = data_sectors / u32::from(sectors_per_cluster);
+        let fat_capacity = u64::from(sectors_per_fat)
+            * u64::try_from(bytes_per_sector).map_err(|_| StorageError::TooLarge)?
+            / 4;
+        if (FAT32_MIN_CLUSTERS..=0x0fff_fff5).contains(&clusters)
+            && fat_capacity >= u64::from(clusters) + 2
+        {
+            return Ok((sectors_per_cluster, sectors_per_fat, clusters));
+        }
+    }
+    Err(StorageError::UnsupportedFilesystem)
+}
+
+fn zero_range<D: BlockDevice>(
+    device: &mut D,
+    first_lba: u64,
+    sector_count: u64,
+    zeros: &[u8],
+) -> Result<(), StorageError> {
+    let sectors_per_chunk = u64::try_from(zeros.len()).map_err(|_| StorageError::TooLarge)?
+        / u64::from(device.sector_size());
+    let mut completed = 0_u64;
+    while completed < sector_count {
+        let sectors = (sector_count - completed).min(sectors_per_chunk);
+        let bytes = usize::try_from(sectors)
+            .ok()
+            .and_then(|count| count.checked_mul(device.sector_size() as usize))
+            .ok_or(StorageError::TooLarge)?;
+        device.write_sectors(first_lba + completed, &zeros[..bytes])?;
+        completed += sectors;
+    }
+    Ok(())
 }
 
 impl<D: BlockDevice> Fat32<D> {
@@ -261,6 +399,73 @@ impl<D: BlockDevice> Fat32<D> {
         self.device.flush()
     }
 
+    pub fn write_file_lfn(
+        &mut self,
+        path: &str,
+        short_alias: &str,
+        contents: &[u8],
+    ) -> Result<(), StorageError> {
+        let trimmed = path.trim_matches('/');
+        let (parent_path, long_name) = trimmed.rsplit_once('/').ok_or(StorageError::InvalidName)?;
+        let long_utf16: Vec<u16> = long_name.encode_utf16().collect();
+        if long_utf16.is_empty()
+            || long_utf16.len() > 13
+            || long_name.contains(['/', '\\'])
+            || !long_name.is_ascii()
+        {
+            return Err(StorageError::InvalidName);
+        }
+        let parent_components = path_components(parent_path)?;
+        let parent = self.resolve_directory(&parent_components)?;
+        let alias = short_name(short_alias)?;
+        if self.find_entry(parent, &alias)?.is_some() {
+            return Err(StorageError::AlreadyExists);
+        }
+
+        let size = u32::try_from(contents.len()).map_err(|_| StorageError::TooLarge)?;
+        let cluster_size = self.cluster_size()?;
+        let needed = contents.len().div_ceil(cluster_size);
+        let chain = self.allocate_chain(needed)?;
+        if let Err(error) = self.write_chain(&chain, contents) {
+            let _ = self.release_clusters(&chain);
+            return Err(error);
+        }
+        let locations = match self.find_two_free_slots(parent) {
+            Ok(locations) => locations,
+            Err(error) => {
+                let _ = self.release_clusters(&chain);
+                return Err(error);
+            }
+        };
+
+        let mut lfn = [0xff_u8; 32];
+        lfn[0] = 0x41;
+        lfn[11] = ATTR_LONG_NAME;
+        lfn[12] = 0;
+        lfn[13] = short_name_checksum(&alias);
+        lfn[26..28].fill(0);
+        let mut name_units = [0xffff_u16; 13];
+        name_units[..long_utf16.len()].copy_from_slice(&long_utf16);
+        if long_utf16.len() < name_units.len() {
+            name_units[long_utf16.len()] = 0;
+        }
+        encode_lfn_units(&mut lfn, &name_units);
+
+        let mut short = [0_u8; 32];
+        short[0..11].copy_from_slice(&alias);
+        short[11] = ATTR_ARCHIVE;
+        set_entry_cluster(&mut short, chain.first().copied().unwrap_or(0));
+        short[28..32].copy_from_slice(&size.to_le_bytes());
+        if let Err(error) = self
+            .write_directory_entry(locations[0], &lfn)
+            .and_then(|()| self.write_directory_entry(locations[1], &short))
+        {
+            let _ = self.release_clusters(&chain);
+            return Err(error);
+        }
+        self.device.flush()
+    }
+
     pub fn create_dir(&mut self, path: &str) -> Result<(), StorageError> {
         let components = path_components(path)?;
         if components.is_empty() {
@@ -362,6 +567,37 @@ impl<D: BlockDevice> Fat32<D> {
             }
         }
         Ok(entries)
+    }
+
+    fn find_two_free_slots(
+        &mut self,
+        directory_cluster: u32,
+    ) -> Result<[EntryLocation; 2], StorageError> {
+        for cluster in self.cluster_chain(directory_cluster)? {
+            let first_sector = self.cluster_lba(cluster)?;
+            for sector_offset in 0..u64::from(self.sectors_per_cluster) {
+                let sector_lba = first_sector
+                    .checked_add(sector_offset)
+                    .ok_or(StorageError::CorruptFilesystem)?;
+                let sector = self.read_sector(sector_lba)?;
+                let mut first = None;
+                for offset in (0..sector.len()).step_by(32) {
+                    if matches!(sector[offset], 0 | 0xe5) {
+                        let location = EntryLocation {
+                            sector: sector_lba,
+                            offset,
+                        };
+                        if let Some(first) = first {
+                            return Ok([first, location]);
+                        }
+                        first = Some(location);
+                    } else {
+                        first = None;
+                    }
+                }
+            }
+        }
+        Err(StorageError::NoSpace)
     }
 
     fn find_entry(
@@ -677,6 +913,19 @@ fn set_entry_cluster(bytes: &mut [u8], cluster: u32) {
     bytes[26..28].copy_from_slice(&cluster_bytes[0..2]);
 }
 
+fn short_name_checksum(name: &[u8; 11]) -> u8 {
+    name.iter().fold(0_u8, |checksum, byte| {
+        checksum.rotate_right(1).wrapping_add(*byte)
+    })
+}
+
+fn encode_lfn_units(entry: &mut [u8; 32], units: &[u16; 13]) {
+    const OFFSETS: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+    for (offset, unit) in OFFSETS.into_iter().zip(units) {
+        entry[offset..offset + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+}
+
 fn le_u16(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
 }
@@ -720,6 +969,31 @@ mod tests {
         assert!(
             root.iter()
                 .any(|entry| entry.name == "BOOT" && entry.is_directory)
+        );
+    }
+
+    #[test]
+    fn native_formatter_creates_writable_fat32() {
+        let mut disk = MemoryBlockDevice::new(128 * 1024, 512).unwrap();
+        let info = format_fat32(&mut disk, 0x4e45_584f).unwrap();
+        assert_eq!(info.bytes_per_sector, 512);
+        assert!(info.total_clusters >= FAT32_MIN_CLUSTERS);
+        let mut filesystem = Fat32::mount(disk).unwrap();
+        filesystem.create_dir("/EFI").unwrap();
+        filesystem.create_dir("/EFI/BOOT").unwrap();
+        filesystem
+            .write_file("/EFI/BOOT/BOOTX64.EFI", b"efi")
+            .unwrap();
+        assert_eq!(
+            filesystem.read_file("/EFI/BOOT/BOOTX64.EFI").unwrap(),
+            b"efi"
+        );
+        filesystem
+            .write_file_lfn("/EFI/BOOT/limine.conf", "LIMINE~1.CON", b"timeout: 0")
+            .unwrap();
+        assert_eq!(
+            filesystem.read_file("/EFI/BOOT/LIMINE~1.CON").unwrap(),
+            b"timeout: 0"
         );
     }
 
