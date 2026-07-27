@@ -396,13 +396,16 @@ fn verify_root(image: &[u8], partition: &PartitionReport) -> Result<([u8; 16], u
 }
 
 fn install_limine_bios(image: &Path, limine_directory: &Path) -> Result<(), String> {
-    let candidates = [
-        limine_directory
-            .join("limine-tool-windows-x86")
-            .join("limine.exe"),
-        limine_directory.join("limine.exe"),
-        limine_directory.join("limine"),
-    ];
+    let windows_tool = limine_directory
+        .join("limine-tool-windows-x86")
+        .join("limine.exe");
+    let windows_fallback = limine_directory.join("limine.exe");
+    let unix_tool = limine_directory.join("limine");
+    let candidates = if cfg!(windows) {
+        [windows_tool, windows_fallback, unix_tool]
+    } else {
+        [unix_tool, windows_fallback, windows_tool]
+    };
     let tool = candidates
         .iter()
         .find(|candidate| candidate.is_file())
