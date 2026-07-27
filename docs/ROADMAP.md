@@ -16,7 +16,8 @@ Legend: **done**, *foundation*, planned.
    round-robin scheduler**
 8. **`no_std` userspace syscall runtime, shell syntax/environment/history,
    pipeline/redirection model, and initial Unix-like command registry**
-9. xHCI, USB enumeration, HID, hubs, mass storage
+9. *xHCI controller/rings, root-port reset, device enumeration, configuration,
+   descriptor parsing, and HID/hub/mass-storage protocol cores*
 10. *Safe image tooling*, interactive disk utility and NexOS installer
 11. UEFI/BIOS installation tests, SMP, real-hardware stabilization
 
@@ -89,6 +90,15 @@ Legend: **done**, *foundation*, planned.
   output redirection, and rejects malformed syntax without partial execution.
 - The initial registry documents 45 built-in, file, system, storage, and
   utility commands, including `diskutil` and `nex-install`.
+- QEMU xHCI controllers complete reset, run, No-Op, Enable Slot, Address
+  Device, and endpoint-zero control transfers. Connected USB 2 and USB 3
+  devices are addressed, configured, and classified from their descriptors.
+- `lsusb`, `usbinfo`, and `usbtest` expose controller capabilities, root-port
+  state, VID/PID, device/interface classes, endpoint counts, and command-ring
+  health.
+- The reusable `no_std` USB crate validates descriptor chains, enumeration
+  transitions, HID boot reports, one-level hub status, xHCI TRB cycle rules,
+  and mass-storage BOT/SCSI packets.
 
 The complete v1 described in the product plan is a long-running systems project.
 Every milestone must retain host tests and QEMU smoke tests before real disks or

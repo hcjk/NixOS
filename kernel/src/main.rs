@@ -20,6 +20,8 @@ mod runtime;
 mod serial;
 mod storage;
 mod syscall;
+mod usb;
+mod xhci;
 
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
@@ -83,7 +85,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.8.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.9.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -187,7 +189,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.8.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.9.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -242,6 +244,21 @@ extern "C" fn kernel_main() -> ! {
             apic.redirection_entries
         );
     }
+    let mut usb = usb::UsbManager::discover(&pci, &mut paging, &mut allocator);
+    let usb_stats = usb.stats();
+    let _ = writeln!(
+        serial,
+        "USB: xHCI PCI={}, initialized={}, ports={}, connected={}, enabled={}, enumerated={}/{}, commands={}, last error={:?}",
+        usb_stats.pci_controllers,
+        usb_stats.initialized_controllers,
+        usb_stats.total_ports,
+        usb_stats.connected_ports,
+        usb_stats.enabled_ports,
+        usb_stats.enumerated_devices,
+        usb_stats.enumeration_attempts,
+        usb_stats.command_completions,
+        usb_stats.last_error
+    );
     let mut storage = storage::StorageManager::discover(&pci, &mut paging, &mut allocator);
     let _ = writeln!(
         serial,
@@ -275,7 +292,10 @@ extern "C" fn kernel_main() -> ! {
             );
         }
     }
-    let _ = writeln!(serial, "milestone 8 ready; entering kernel monitor");
+    let _ = writeln!(
+        serial,
+        "milestone 9 USB foundation ready; entering kernel monitor"
+    );
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,
@@ -289,6 +309,14 @@ extern "C" fn kernel_main() -> ! {
         storage.ahci_count(),
         storage.ide_count()
     );
+    let _ = writeln!(
+        console,
+        "[ok] USB: {} xHCI controller(s), {} root ports, {} connected, {} enumerated",
+        usb.controller_count(),
+        usb_stats.total_ports,
+        usb_stats.connected_ports,
+        usb_stats.enumerated_devices
+    );
     console.reset_color();
 
     let context = monitor::MonitorContext::new(
@@ -298,6 +326,7 @@ extern "C" fn kernel_main() -> ! {
         &cpu,
         platform.as_ref(),
         &pci,
+        &mut usb,
         &mut storage,
         interrupt_controller,
         monitor::BootMetadata::new(memory_map.entries().len(), rsdp_address),

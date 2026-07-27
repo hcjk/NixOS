@@ -9,6 +9,7 @@ limine = "0.6.5"
 nexos-abi = { path = "../crates/nexos-abi" }
 nexos-runtime = { path = "../crates/nexos-runtime" }
 nexos-storage = { path = "../crates/nexos-storage", default-features = false }
+nexos-usb = { path = "../crates/nexos-usb" }
 nexos-userspace = { path = "../crates/nexos-userspace" }
 noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = [
     "regular",

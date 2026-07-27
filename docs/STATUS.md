@@ -1,6 +1,6 @@
 # NexOS status
 
-Last verified: 2026-07-24
+Last verified: 2026-07-28
 
 ## Working
 
@@ -66,6 +66,20 @@ Last verified: 2026-07-24
   history.
 - A classified registry of 45 Unix-inspired commands plus `commands`,
   `shellparse`, and `shelltest` kernel diagnostics.
+- PCI xHCI discovery, firmware ownership handoff, controller halt/reset/start,
+  4 KiB DMA command and event rings, ERST/DCBAA setup, scratchpad allocation,
+  and bounded polling.
+- USB 2 root-port reset plus USB 2/3 port speed, power, link, connection, and
+  enabled-state reporting.
+- Enable Slot and Address Device commands followed by endpoint-zero
+  `GET_DESCRIPTOR` and `SET_CONFIGURATION` control transfers.
+- Descriptor-based VID/PID, USB version, interface, endpoint, boot HID, hub,
+  and Bulk-Only mass-storage classification through `lsusb`.
+- `usbinfo` controller/capability diagnostics and a repeatable xHCI No-Op
+  command-ring `usbtest`.
+- A reusable `no_std` USB library covering descriptor validation,
+  enumeration states, xHCI TRB rings, HID boot keyboard/mouse reports,
+  one-level hub descriptors/status, and mass-storage BOT/SCSI commands.
 
 ## Emulator verification
 
@@ -110,11 +124,19 @@ The milestone-8 host suite passes 43 tests. BIOS and UEFI QEMU boots execute
 `shelltest`, producing two pipeline stages, expanding `$HOME` to `/home/root`,
 and preserving overwrite redirection to `/tmp/count`.
 
+The milestone-9 host suite passes 61 tests. A QEMU xHCI controller with an
+emulated USB keyboard and USB mass-storage disk reports two connected, enabled,
+addressed, and configured devices. An isolated mass-storage run identifies
+VID/PID `46f4:0001`, USB 3.0, one mass-storage interface, and two bulk
+endpoints; repeated No-Op commands complete successfully.
+
 ## Not implemented yet
 
 Page-table frame reclamation, a Rust `GlobalAlloc` adapter, HPET clock use, PCI
 ECAM access, power-off through the FADT, SMP, file-backed kernel VFS mounts,
-general userspace executables, shell, USB, NVMe, FAT32 long-file-name creation,
-NexFS journaling, and physical-disk installation remain later milestones. The
-shell frontend and command namespace exist, but the current prompt is still a
-kernel monitor rather than the final filesystem-backed ring-3 shell.
+general userspace executables, shell, live USB HID interrupt input, downstream
+hub enumeration, USB mass-storage block transfers, hotplug, NVMe, FAT32
+long-file-name creation, NexFS journaling, and physical-disk installation
+remain later work. The shell frontend and command namespace exist, but the
+current prompt is still a kernel monitor rather than the final
+filesystem-backed ring-3 shell.

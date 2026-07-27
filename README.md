@@ -4,7 +4,8 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the first eight engineering milestones:
+The repository currently implements eight milestones and the Milestone 9 USB
+foundation:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -34,10 +35,13 @@ The repository currently implements the first eight engineering milestones:
 - a freestanding userspace syscall library and bounded shell parser with
   quoting, environment expansion, history, pipelines, and redirection; and
 - a 45-command Unix-inspired registry covering file, system, storage, and
-  utility commands.
+  utility commands; and
+- a polling xHCI controller with firmware handoff, DMA command/event rings,
+  root-port reset, USB device addressing/configuration, descriptor-based class
+  discovery, and tested HID, hub, and mass-storage protocol primitives.
 
-Filesystem-backed ring-3 command execution, USB, and installation onto
-physical disks remain tracked milestones. See
+Live USB class endpoint I/O, filesystem-backed ring-3 command execution, and
+installation onto physical disks remain tracked milestones. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -110,7 +114,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-qemu.ps1
 ```
 
 At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
-`cpuinfo`, `bootinfo`, `acpi`, `lspci`, `lsblk`, `disktest 0`, `uptime`,
+`cpuinfo`, `bootinfo`, `acpi`, `lspci`, `lsusb`, `usbinfo`, `usbtest`, `lsblk`,
+`disktest 0`, `uptime`,
 `virtinfo`, `ps`, `schedinfo`, `syscalls`, `usertest`, `commands`, `shelltest`,
 `vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `reboot`, or `halt`.
 `usertest` executes a small ring-3 program that queries ABI v1 with `SYSCALL`

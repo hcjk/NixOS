@@ -15,6 +15,7 @@ use crate::runtime;
 use crate::serial::SerialPort;
 use crate::storage::{DeviceLocation, PartitionProbe, StorageManager};
 use crate::syscall;
+use crate::usb::UsbManager;
 use nexos_storage::BlockDevice;
 
 const MAX_COMMAND_LENGTH: usize = 128;
@@ -47,6 +48,7 @@ pub struct Monitor<'a> {
     cpu: &'a CpuInfo,
     platform: Option<&'a PlatformInfo>,
     pci: &'a PciInventory,
+    usb: &'a mut UsbManager,
     storage: &'a mut StorageManager,
     controller: ControllerInfo,
     memory_region_count: usize,
@@ -60,6 +62,7 @@ pub struct MonitorContext<'a> {
     cpu: &'a CpuInfo,
     platform: Option<&'a PlatformInfo>,
     pci: &'a PciInventory,
+    usb: &'a mut UsbManager,
     storage: &'a mut StorageManager,
     controller: ControllerInfo,
     boot: BootMetadata,
@@ -74,6 +77,7 @@ impl<'a> MonitorContext<'a> {
         cpu: &'a CpuInfo,
         platform: Option<&'a PlatformInfo>,
         pci: &'a PciInventory,
+        usb: &'a mut UsbManager,
         storage: &'a mut StorageManager,
         controller: ControllerInfo,
         boot: BootMetadata,
@@ -85,6 +89,7 @@ impl<'a> MonitorContext<'a> {
             cpu,
             platform,
             pci,
+            usb,
             storage,
             controller,
             boot,
@@ -110,6 +115,7 @@ impl<'a> Monitor<'a> {
             cpu: context.cpu,
             platform: context.platform,
             pci: context.pci,
+            usb: context.usb,
             storage: context.storage,
             controller: context.controller,
             memory_region_count: context.boot.memory_region_count,
@@ -173,18 +179,20 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "          bootinfo acpi lspci lsblk disktest irqinfo mouseinfo uptime"
+                        "          bootinfo acpi lspci lsusb usbinfo usbtest lsblk disktest"
                     ),
                 );
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "          virtinfo maptest ps schedinfo syscalls usertest vfspath commands"
+                        "          irqinfo mouseinfo uptime virtinfo maptest ps schedinfo syscalls"
                     ),
                 );
                 self.write_line(
                     FOREGROUND,
-                    format_args!("          shellparse shelltest int3 reboot halt echo"),
+                    format_args!(
+                        "          usertest vfspath commands shellparse shelltest int3 reboot halt echo"
+                    ),
                 );
             }
             b"clear" => {
@@ -196,7 +204,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.8.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.9.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -249,6 +257,9 @@ impl<'a> Monitor<'a> {
             }
             b"acpi" => self.print_acpi(),
             b"lspci" => self.print_pci(),
+            b"lsusb" => self.print_usb_devices(),
+            b"usbinfo" => self.print_usb_info(),
+            b"usbtest" => self.test_usb(),
             b"lsblk" => self.print_storage(),
             _ if command.starts_with(b"disktest ") => {
                 if let Some(index) = parse_decimal(&command[9..]) {
@@ -641,6 +652,158 @@ impl<'a> Monitor<'a> {
         }
     }
 
+    fn print_usb_devices(&mut self) {
+        self.usb.refresh();
+        let stats = self.usb.stats();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "USB root devices: {} connected on {} xHCI controller(s)",
+                stats.connected_ports,
+                self.usb.controller_count()
+            ),
+        );
+        let mut found = false;
+        for controller_index in 0..self.usb.controller_count() {
+            let Some(controller) = self.usb.controller(controller_index).copied() else {
+                continue;
+            };
+            for device in controller.devices().iter().copied() {
+                found = true;
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "Bus {:02} Device {:03}: ID {:04x}:{:04x} USB {}.{:02} slot={} port={} speed={} class={:02x}:{:02x}:{:02x}",
+                        controller_index + 1,
+                        device.address,
+                        device.vendor_id,
+                        device.product_id,
+                        device.usb_version >> 8,
+                        device.usb_version & 0xff,
+                        device.slot_id,
+                        device.root_port,
+                        usb_speed_name(device.speed),
+                        device.device_class,
+                        device.device_subclass,
+                        device.device_protocol
+                    ),
+                );
+                self.write_line(
+                    MUTED,
+                    format_args!(
+                        "  config={} interfaces={} endpoints={} HID-keyboard={} HID-mouse={} hubs={} mass-storage={}",
+                        device.configuration_value,
+                        device.summary.interfaces,
+                        device.summary.endpoints,
+                        device.summary.hid_keyboards,
+                        device.summary.hid_mice,
+                        device.summary.hubs,
+                        device.summary.mass_storage
+                    ),
+                );
+            }
+            for port in controller.ports().iter().copied() {
+                if !port.connected
+                    || controller
+                        .devices()
+                        .iter()
+                        .any(|device| device.root_port == port.number)
+                {
+                    continue;
+                }
+                found = true;
+                self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "Bus {:02} Port {:02}: speed={}, enabled={}, powered={}, link-state={}",
+                        controller_index + 1,
+                        port.number,
+                        usb_speed_name(port.speed),
+                        yes_no(port.enabled),
+                        yes_no(port.powered),
+                        port.link_state
+                    ),
+                );
+            }
+        }
+        if !found {
+            self.write_line(MUTED, format_args!("No connected USB root-port devices."));
+        }
+    }
+
+    fn print_usb_info(&mut self) {
+        self.usb.refresh();
+        let stats = self.usb.stats();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "xHCI: PCI={}, initialized={}, ports={}, connected={}, enabled={}, enumerated={}/{}, failures={}, commands={}",
+                stats.pci_controllers,
+                stats.initialized_controllers,
+                stats.total_ports,
+                stats.connected_ports,
+                stats.enabled_ports,
+                stats.enumerated_devices,
+                stats.enumeration_attempts,
+                stats.enumeration_failures,
+                stats.command_completions
+            ),
+        );
+        for index in 0..self.usb.controller_count() {
+            let Some(controller) = self.usb.controller(index).copied() else {
+                continue;
+            };
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "xhci{index}: {:02x}:{:02x}.{} {:04x}:{:04x}, HCIVERSION={}.{:02}, slots={}, interrupters={}, context={}B, AC64={}, scratchpads={}, no-op={}",
+                    controller.bus,
+                    controller.device,
+                    controller.function,
+                    controller.vendor_id,
+                    controller.device_id,
+                    controller.version >> 8,
+                    controller.version & 0xff,
+                    controller.max_slots,
+                    controller.max_interrupters,
+                    controller.context_bytes,
+                    yes_no(controller.supports_64_bit),
+                    controller.scratchpads,
+                    controller.no_op_completion
+                ),
+            );
+        }
+        if let Some(error) = stats.last_error {
+            self.write_line(
+                WARNING,
+                format_args!(
+                    "last xHCI error: {error:?} (detail={})",
+                    error.detail_code()
+                ),
+            );
+        }
+    }
+
+    fn test_usb(&mut self) {
+        let passed = self.usb.self_test();
+        let stats = self.usb.stats();
+        self.write_line(
+            if passed { INFO } else { WARNING },
+            format_args!(
+                "usbtest: controllers={}, commands={}, connected={}, completion=success, passed={passed}",
+                stats.initialized_controllers,
+                stats.command_completions,
+                stats.connected_ports
+            ),
+        );
+        if let Some(error) = stats.last_error {
+            self.write_line(
+                WARNING,
+                format_args!("usbtest error: {error:?} (detail={})", error.detail_code()),
+            );
+        }
+    }
+
     fn print_interrupts(&mut self) {
         let mode = self.controller.mode.name();
         self.write_line(
@@ -829,6 +992,17 @@ impl fmt::Display for Ascii<'_> {
 
 const fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+const fn usb_speed_name(speed: nexos_usb::UsbSpeed) -> &'static str {
+    match speed {
+        nexos_usb::UsbSpeed::Low => "low-speed",
+        nexos_usb::UsbSpeed::Full => "full-speed",
+        nexos_usb::UsbSpeed::High => "high-speed",
+        nexos_usb::UsbSpeed::Super => "SuperSpeed",
+        nexos_usb::UsbSpeed::SuperPlus => "SuperSpeedPlus",
+        nexos_usb::UsbSpeed::Unknown => "unknown",
+    }
 }
 
 fn parse_decimal(bytes: &[u8]) -> Option<usize> {
