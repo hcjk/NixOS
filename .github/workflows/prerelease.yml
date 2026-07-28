@@ -184,12 +184,15 @@ jobs:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           set -euo pipefail
-          firmware="/usr/share/OVMF/OVMF_CODE.fd"
-          if [[ ! -f "$firmware" ]]; then
-            firmware="$(find /usr/share -type f -name OVMF_CODE.fd -print -quit)"
-          fi
+          firmware=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" == */OVMF_CODE*.fd && -f "$candidate" ]]; then
+              firmware="$candidate"
+              break
+            fi
+          done < <(dpkg-query -L ovmf)
           if [[ -z "$firmware" || ! -f "$firmware" ]]; then
-            echo "OVMF_CODE.fd was not found after installing ovmf" >&2
+            echo "An OVMF_CODE firmware image was not found after installing ovmf" >&2
             exit 1
           fi
           python3 scripts/qemu-installer-smoke.py \
