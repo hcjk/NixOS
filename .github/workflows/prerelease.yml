@@ -140,6 +140,18 @@ jobs:
           cp "$limine/limine-bios-cd.bin" "$staging/boot/limine/"
           cp "$limine/limine-uefi-cd.bin" "$staging/boot/limine/"
           cp "$limine/BOOTX64.EFI" "$staging/EFI/BOOT/"
+          python3 - "$limine/limine-bios-hdd.h" \
+            "$staging/boot/limine/limine-bios-hdd.bin" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="ascii")
+          payload = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-fA-F]{2})", source))
+          if len(payload) < 513:
+              raise SystemExit("Limine HDD stage header did not contain a valid boot image")
+          pathlib.Path(sys.argv[2]).write_bytes(payload)
+          PY
 
           printf '%s\n' \
             'timeout: 0' \
@@ -149,6 +161,10 @@ jobs:
             '    path: boot():/boot/nexos-kernel' \
             '    module_path: boot():/EFI/BOOT/BOOTX64.EFI' \
             '    module_string: nexos-bootx64' \
+            '    module_path: boot():/boot/limine/limine-bios-hdd.bin' \
+            '    module_string: nexos-limine-hdd' \
+            '    module_path: boot():/boot/limine/limine-bios.sys' \
+            '    module_string: nexos-limine-bios' \
             > "$staging/limine.conf"
 
           xorriso -as mkisofs \

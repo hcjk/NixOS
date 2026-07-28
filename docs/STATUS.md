@@ -100,6 +100,10 @@ Last verified: 2026-07-28
   protective MBR plus primary/backup GPT, a BIOS-reserved partition, a 64 MiB
   FAT32 ESP, and a NexFS root, then verifies GPT CRCs, boot files, kernel CRC,
   configuration, and root UUID.
+- Limine legacy-BIOS stage-1 and stage-2 installation, `limine-bios.sys`
+  placement, and byte-for-byte BIOS-stage verification alongside the UEFI
+  fallback path.
+- A nine-step framebuffer and COM1 progress bar for destructive installs.
 
 ## Emulator verification
 
@@ -165,6 +169,12 @@ validated the result. After removing the ISO, QEMU firmware loaded
 `EFI/BOOT/BOOTX64.EFI` from that disk and NexOS 0.11.0-dev returned to the
 monitor.
 
+The v0.11.1 regression test first reproduced the previous legacy boot hang
+immediately after SeaBIOS printed `Booting from Hard Disk...`. A fresh install
+then displayed all nine progress steps, verified the new MBR/HDD stages and
+FAT32 boot files, and booted the same 256 MiB disk without the ISO under both
+QEMU SeaBIOS and UEFI.
+
 ## Not implemented yet
 
 Page-table frame reclamation, HPET clock use, PCI ECAM access, power-off
@@ -173,9 +183,8 @@ executables, a filesystem-backed shell, live USB HID interrupt input,
 downstream hub enumeration, USB mass-storage block transfers, hotplug, NVMe,
 general FAT32 long-file-name creation, and NexFS journaling remain later work.
 
-The in-OS installer is a deliberately narrow real-hardware preview: UEFI
-x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI or legacy IDE,
-whole-disk guided layout, and PS/2/i8042 or COM1 input. It does not install the
-Limine legacy-BIOS stages, preserve partitions, resize filesystems, drive USB
-storage, detect software RAID, or support NVMe/4Kn targets. The host-side tools
-still refuse raw disks.
+The in-OS installer is a deliberately narrow real-hardware preview: BIOS or
+UEFI x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI or legacy
+IDE, whole-disk guided layout, and PS/2/i8042 or COM1 input. It does not
+preserve partitions, resize filesystems, drive USB storage, detect software
+RAID, or support NVMe/4Kn targets. The host-side tools still refuse raw disks.

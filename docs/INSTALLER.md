@@ -3,7 +3,7 @@
 ## Install from the NexOS release ISO
 
 Milestone 11 adds a guided installer directly to the NexOS kernel monitor. It
-targets modern x86-64 UEFI machines with Secure Boot disabled, an AHCI or
+targets x86-64 BIOS or UEFI machines with Secure Boot disabled, an AHCI or
 legacy IDE target disk, and 512-byte logical sectors. The disk must be at least
 128 MiB.
 
@@ -31,8 +31,9 @@ Do not copy that example without checking `lsblk`; the correct target may be
 nexos> diskutil verify disk0
 ```
 
-Remove the ISO and reboot in UEFI mode. The installed fallback loader is
-`EFI/BOOT/BOOTX64.EFI`.
+Remove the ISO and reboot from the installed disk. The installer writes
+Limine's MBR/HDD stages into the reserved BIOS partition and also installs the
+UEFI fallback loader at `EFI/BOOT/BOOTX64.EFI`.
 
 The in-OS safety checks refuse a partial/mismatched confirmation, the detected
 live boot disk, missing installer payloads, unsupported sector sizes,
@@ -41,9 +42,14 @@ release ISO carries its kernel and UEFI loader as read-only Limine modules;
 ordinary installed boots intentionally omit the loader module and cannot start
 another destructive install.
 
-The in-OS installer is whole-disk and UEFI-only. It does not preserve or resize
-partitions, install legacy-BIOS stages, support NVMe/USB mass-storage/RAID/4Kn
-targets, or provide rollback after writes begin.
+The in-OS installer is whole-disk. It does not preserve or resize partitions,
+support NVMe/USB mass-storage/RAID/4Kn targets, or provide rollback after
+writes begin.
+
+During installation, NexOS displays a nine-step progress bar covering target
+validation, GPT creation, FAT32 formatting, file copying, BIOS-stage
+installation, NexFS formatting, cache flushing, byte verification, and
+completion.
 
 ## Host image tools
 

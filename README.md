@@ -47,7 +47,7 @@ preview:
   x86-64 hardware.
 
 Live USB class endpoint I/O, filesystem-backed ring-3 command execution, and
-legacy-BIOS installation from inside NexOS remain tracked work. See
+broader storage-controller support remain tracked work. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -94,7 +94,7 @@ Run either executable without arguments for its interactive workflow. See
 [docs/INSTALLER.md](docs/INSTALLER.md) for guided/manual modes and safety
 behavior.
 
-From the NexOS release ISO, the equivalent real-disk UEFI workflow is:
+From the NexOS release ISO, the equivalent real-disk workflow is:
 
 ```text
 nexos> lsblk
@@ -107,8 +107,8 @@ nexos> diskutil verify disk0
 Replace `disk0` with the exact target shown by `lsblk`. The install command
 erases the whole selected disk. It refuses non-512-byte-sector disks, disks
 smaller than 128 MiB, the detected live boot disk, missing installer payloads,
-and incomplete confirmation tokens. This release installs a UEFI boot path;
-Secure Boot must be disabled.
+and incomplete confirmation tokens. This release installs both Limine legacy
+BIOS stages and the standard UEFI fallback path. Secure Boot must be disabled.
 
 ## Kernel build
 

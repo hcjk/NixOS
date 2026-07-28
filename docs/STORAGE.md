@@ -45,7 +45,7 @@ devices. It requires the exact target name and an `ERASE-diskN` token, refuses
 the detected boot disk, writes a new GPT/FAT32/NexFS layout, flushes it, and
 reads the installed payload back before reporting success.
 
-The in-kernel path is whole-disk and UEFI-only. It supports 512-byte logical
-sectors and does not resize or preserve existing partitions. NVMe, USB
-mass-storage transfers, hotplug, RAID, 4Kn media, and legacy-BIOS stage
-installation from inside NexOS remain outside this release.
+The in-kernel path is whole-disk and installs both Limine HDD/MBR stages and a
+UEFI fallback loader. It supports 512-byte logical sectors and does not resize
+or preserve existing partitions. NVMe, USB mass-storage transfers, hotplug,
+RAID, and 4Kn media remain outside this release.

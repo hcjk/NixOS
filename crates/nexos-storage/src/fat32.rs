@@ -406,10 +406,10 @@ impl<D: BlockDevice> Fat32<D> {
         contents: &[u8],
     ) -> Result<(), StorageError> {
         let trimmed = path.trim_matches('/');
-        let (parent_path, long_name) = trimmed.rsplit_once('/').ok_or(StorageError::InvalidName)?;
+        let (parent_path, long_name) = trimmed.rsplit_once('/').unwrap_or(("", trimmed));
         let long_utf16: Vec<u16> = long_name.encode_utf16().collect();
         if long_utf16.is_empty()
-            || long_utf16.len() > 13
+            || long_utf16.len() > 26
             || long_name.contains(['/', '\\'])
             || !long_name.is_ascii()
         {
@@ -430,7 +430,8 @@ impl<D: BlockDevice> Fat32<D> {
             let _ = self.release_clusters(&chain);
             return Err(error);
         }
-        let locations = match self.find_two_free_slots(parent) {
+        let lfn_count = long_utf16.len().div_ceil(13);
+        let locations = match self.find_free_slots(parent, lfn_count + 1) {
             Ok(locations) => locations,
             Err(error) => {
                 let _ = self.release_clusters(&chain);
@@ -438,28 +439,38 @@ impl<D: BlockDevice> Fat32<D> {
             }
         };
 
-        let mut lfn = [0xff_u8; 32];
-        lfn[0] = 0x41;
-        lfn[11] = ATTR_LONG_NAME;
-        lfn[12] = 0;
-        lfn[13] = short_name_checksum(&alias);
-        lfn[26..28].fill(0);
-        let mut name_units = [0xffff_u16; 13];
-        name_units[..long_utf16.len()].copy_from_slice(&long_utf16);
-        if long_utf16.len() < name_units.len() {
-            name_units[long_utf16.len()] = 0;
+        let checksum = short_name_checksum(&alias);
+        for (disk_index, location) in locations.iter().copied().take(lfn_count).enumerate() {
+            let sequence = lfn_count - disk_index;
+            let chunk_start = (sequence - 1) * 13;
+            let chunk_end = (chunk_start + 13).min(long_utf16.len());
+            let mut name_units = [0xffff_u16; 13];
+            name_units[..chunk_end - chunk_start]
+                .copy_from_slice(&long_utf16[chunk_start..chunk_end]);
+            if chunk_end == long_utf16.len() && chunk_end - chunk_start < name_units.len() {
+                name_units[chunk_end - chunk_start] = 0;
+            }
+
+            let mut lfn = [0xff_u8; 32];
+            lfn[0] = u8::try_from(sequence).map_err(|_| StorageError::InvalidName)?
+                | if sequence == lfn_count { 0x40 } else { 0 };
+            lfn[11] = ATTR_LONG_NAME;
+            lfn[12] = 0;
+            lfn[13] = checksum;
+            lfn[26..28].fill(0);
+            encode_lfn_units(&mut lfn, &name_units);
+            if let Err(error) = self.write_directory_entry(location, &lfn) {
+                let _ = self.release_clusters(&chain);
+                return Err(error);
+            }
         }
-        encode_lfn_units(&mut lfn, &name_units);
 
         let mut short = [0_u8; 32];
         short[0..11].copy_from_slice(&alias);
         short[11] = ATTR_ARCHIVE;
         set_entry_cluster(&mut short, chain.first().copied().unwrap_or(0));
         short[28..32].copy_from_slice(&size.to_le_bytes());
-        if let Err(error) = self
-            .write_directory_entry(locations[0], &lfn)
-            .and_then(|()| self.write_directory_entry(locations[1], &short))
-        {
+        if let Err(error) = self.write_directory_entry(locations[lfn_count], &short) {
             let _ = self.release_clusters(&chain);
             return Err(error);
         }
@@ -569,10 +580,15 @@ impl<D: BlockDevice> Fat32<D> {
         Ok(entries)
     }
 
-    fn find_two_free_slots(
+    fn find_free_slots(
         &mut self,
         directory_cluster: u32,
-    ) -> Result<[EntryLocation; 2], StorageError> {
+        needed: usize,
+    ) -> Result<Vec<EntryLocation>, StorageError> {
+        if needed == 0 {
+            return Err(StorageError::InvalidBuffer);
+        }
+        let mut locations = Vec::with_capacity(needed);
         for cluster in self.cluster_chain(directory_cluster)? {
             let first_sector = self.cluster_lba(cluster)?;
             for sector_offset in 0..u64::from(self.sectors_per_cluster) {
@@ -580,19 +596,17 @@ impl<D: BlockDevice> Fat32<D> {
                     .checked_add(sector_offset)
                     .ok_or(StorageError::CorruptFilesystem)?;
                 let sector = self.read_sector(sector_lba)?;
-                let mut first = None;
                 for offset in (0..sector.len()).step_by(32) {
                     if matches!(sector[offset], 0 | 0xe5) {
-                        let location = EntryLocation {
+                        locations.push(EntryLocation {
                             sector: sector_lba,
                             offset,
-                        };
-                        if let Some(first) = first {
-                            return Ok([first, location]);
+                        });
+                        if locations.len() == needed {
+                            return Ok(locations);
                         }
-                        first = Some(location);
                     } else {
-                        first = None;
+                        locations.clear();
                     }
                 }
             }
@@ -936,7 +950,7 @@ fn le_u32(bytes: &[u8], offset: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
 
     use super::*;
     use crate::MemoryBlockDevice;
@@ -995,6 +1009,21 @@ mod tests {
             filesystem.read_file("/EFI/BOOT/LIMINE~1.CON").unwrap(),
             b"timeout: 0"
         );
+        filesystem
+            .write_file_lfn("/limine-bios.sys", "LIMINE~1.SYS", b"bios-stage")
+            .unwrap();
+        assert_eq!(
+            filesystem.read_file("/LIMINE~1.SYS").unwrap(),
+            b"bios-stage"
+        );
+        let disk = filesystem.into_inner().unwrap();
+        let external =
+            fatfs::FileSystem::new(Cursor::new(disk.into_bytes()), fatfs::FsOptions::new())
+                .unwrap();
+        let mut bios_file = external.root_dir().open_file("limine-bios.sys").unwrap();
+        let mut bios_contents = Vec::new();
+        bios_file.read_to_end(&mut bios_contents).unwrap();
+        assert_eq!(bios_contents, b"bios-stage");
     }
 
     #[test]

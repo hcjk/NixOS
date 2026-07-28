@@ -212,7 +212,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.11.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.11.1-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -1142,7 +1142,7 @@ impl<'a> Monitor<'a> {
         );
         self.write_line(
             WARNING,
-            format_args!("Milestone 11 installs to UEFI x86-64 hardware only."),
+            format_args!("The guided layout installs both BIOS and UEFI boot paths."),
         );
         if !self.install_payload.ready() {
             self.write_line(
@@ -1175,14 +1175,23 @@ impl<'a> Monitor<'a> {
         );
         self.write_line(
             MUTED,
-            format_args!("Writing GPT, FAT32 ESP, NexFS root, kernel, and UEFI loader..."),
+            format_args!("Starting verified BIOS/UEFI installation..."),
         );
         let payload = self.install_payload;
-        let result = self
-            .storage
+        let Self {
+            console,
+            serial,
+            storage,
+            ..
+        } = self;
+        let result = storage
             .device_mut(index)
             .ok_or(installer::InstallerError::UnsupportedDisk)
-            .and_then(|device| installer::install(device, payload));
+            .and_then(|device| {
+                installer::install(device, payload, |progress| {
+                    write_install_progress(console, serial, progress);
+                })
+            });
         match result {
             Ok(report) => {
                 self.write_line(
@@ -1195,7 +1204,7 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     INFO,
                     format_args!(
-                        "disk{index}: ESP p2 at {}, NexFS p3 at {}; reboot into UEFI firmware",
+                        "disk{index}: ESP p2 at {}, NexFS p3 at {}; remove ISO and reboot",
                         report.layout.esp.first_lba, report.layout.root.first_lba
                     ),
                 );
@@ -1306,6 +1315,45 @@ impl<'a> Monitor<'a> {
         let _ = self.console.write_fmt(arguments);
         let _ = self.serial.write_fmt(arguments);
     }
+}
+
+fn write_install_progress(
+    console: &mut Console,
+    serial: &mut SerialPort,
+    progress: installer::InstallProgress,
+) {
+    const WIDTH: usize = 24;
+    let mut bar = [b'-'; WIDTH];
+    let filled = usize::from(progress.step)
+        .saturating_mul(WIDTH)
+        .checked_div(usize::from(progress.total))
+        .unwrap_or(0)
+        .min(WIDTH);
+    bar[..filled].fill(b'#');
+    let percent = u16::from(progress.step)
+        .saturating_mul(100)
+        .checked_div(u16::from(progress.total))
+        .unwrap_or(0);
+    console.set_color(INFO);
+    let _ = writeln!(
+        console,
+        "[{}] {:>3}%  {}/{} {}",
+        Ascii(&bar),
+        percent,
+        progress.step,
+        progress.total,
+        progress.label
+    );
+    console.reset_color();
+    let _ = writeln!(
+        serial,
+        "[{}] {:>3}%  {}/{} {}",
+        Ascii(&bar),
+        percent,
+        progress.step,
+        progress.total,
+        progress.label
+    );
 }
 
 struct Ascii<'a>(&'a [u8]);

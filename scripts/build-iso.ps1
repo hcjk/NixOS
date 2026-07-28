@@ -52,6 +52,7 @@ if (Test-Path -LiteralPath $staging) {
 
 $limineFiles = @(
     'limine-bios.sys',
+    'limine-bios-hdd.h',
     'limine-bios-cd.bin',
     'limine-uefi-cd.bin',
     'BOOTX64.EFI'
@@ -72,6 +73,17 @@ Copy-Item -LiteralPath (Join-Path $limine 'limine-bios-cd.bin') -Destination $bo
 Copy-Item -LiteralPath (Join-Path $limine 'limine-uefi-cd.bin') -Destination $bootDirectory
 Copy-Item -LiteralPath (Join-Path $limine 'BOOTX64.EFI') -Destination $efiDirectory
 
+$hddHeader = Get-Content -Raw -LiteralPath (Join-Path $limine 'limine-bios-hdd.h')
+$hddMatches = [regex]::Matches($hddHeader, '0x([0-9a-fA-F]{2})')
+if ($hddMatches.Count -lt 513) {
+    throw 'Limine HDD stage header did not contain a valid boot image.'
+}
+$hddBytes = [byte[]]::new($hddMatches.Count)
+for ($index = 0; $index -lt $hddMatches.Count; $index++) {
+    $hddBytes[$index] = [Convert]::ToByte($hddMatches[$index].Groups[1].Value, 16)
+}
+[IO.File]::WriteAllBytes((Join-Path $bootDirectory 'limine-bios-hdd.bin'), $hddBytes)
+
 $configuration = @'
 timeout: 0
 
@@ -80,6 +92,10 @@ timeout: 0
     path: boot():/boot/nexos-kernel
     module_path: boot():/EFI/BOOT/BOOTX64.EFI
     module_string: nexos-bootx64
+    module_path: boot():/boot/limine/limine-bios-hdd.bin
+    module_string: nexos-limine-hdd
+    module_path: boot():/boot/limine/limine-bios.sys
+    module_string: nexos-limine-bios
 '@
 Set-Content -LiteralPath (Join-Path $staging 'limine.conf') `
     -Value $configuration -Encoding Ascii

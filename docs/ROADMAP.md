@@ -20,8 +20,9 @@ Legend: **done**, *foundation*, planned.
    descriptor parsing, and HID/hub/mass-storage protocol cores*
 10. **Safe image tooling, interactive disk utility, guided/manual NexOS
     installer, and BIOS/UEFI installed-image verification**
-11. *UEFI physical-disk installation, global allocator, serial-console input,
-    native FAT32 formatting/LFN boot configuration, and hardware safeguards*
+11. *BIOS/UEFI physical-disk installation, global allocator, serial-console
+    input, native FAT32 formatting/LFN boot configuration, progress reporting,
+    and hardware safeguards*
 
 ## Completed foundation acceptance
 
@@ -126,10 +127,17 @@ Legend: **done**, *foundation*, planned.
   installed boot from becoming a self-erasing installation environment.
 - COM1 is now an input as well as diagnostic console, and the kernel uses a
   16 MiB coalescing global allocator for filesystem and installer operations.
+- The v0.11.1 installer embeds Limine's HDD and BIOS system payloads, installs
+  and verifies the stage-1 MBR code plus stage 2 in the reserved BIOS
+  partition, and copies `limine-bios.sys` and a root configuration to FAT32.
+  The same in-OS-installed disk boots without its ISO under both QEMU SeaBIOS
+  and UEFI firmware.
+- Installation progress is visible as a nine-step percentage bar, including
+  partitioning, filesystem creation, both firmware boot paths, flushing, and
+  read-back verification.
 
 The complete v1 described in the product plan is a long-running systems
 project. Physical hardware support in Milestone 11 is deliberately limited to
-UEFI, AHCI/legacy IDE, 512-byte logical sectors, framebuffer output, and
-PS/2/i8042 or COM1 input. SMP, live USB HID/mass-storage transfers, NVMe,
-legacy-BIOS installation from NexOS, and filesystem-backed ring-3 userspace
-remain later stabilization work.
+BIOS or UEFI, AHCI/legacy IDE, 512-byte logical sectors, framebuffer output,
+and PS/2/i8042 or COM1 input. SMP, live USB HID/mass-storage transfers, NVMe,
+and filesystem-backed ring-3 userspace remain later stabilization work.
