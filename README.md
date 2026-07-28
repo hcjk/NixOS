@@ -170,6 +170,10 @@ its CRC32, and never writes the disk. The Unix-like shell frontend is present,
 but the filesystem-backed ring-3 shell is not yet the default prompt.
 The monitor accepts input from PS/2/i8042 keyboards and COM1.
 
+Release builds also run `scripts/qemu-installer-smoke.py`. The test performs a
+fresh in-OS install and refuses publication unless the installed disk boots
+without its ISO under both SeaBIOS and UEFI.
+
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.
 

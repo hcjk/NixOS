@@ -104,6 +104,8 @@ Last verified: 2026-07-28
   placement, and byte-for-byte BIOS-stage verification alongside the UEFI
   fallback path.
 - A nine-step framebuffer and COM1 progress bar for destructive installs.
+- A release-blocking QEMU regression harness that performs the in-OS install,
+  removes the ISO, and verifies both SeaBIOS and UEFI installed-disk boots.
 
 ## Emulator verification
 
@@ -174,6 +176,11 @@ immediately after SeaBIOS printed `Booting from Hard Disk...`. A fresh install
 then displayed all nine progress steps, verified the new MBR/HDD stages and
 FAT32 boot files, and booted the same 256 MiB disk without the ISO under both
 QEMU SeaBIOS and UEFI.
+
+The v0.11.2 release workflow turns that manual regression into an automated
+publication gate. It creates a temporary disk, drives `nex-install` over COM1,
+waits for the verified 100% step, then starts two fresh QEMU processes without
+the ISO and requires each firmware path to reach `nexos>`.
 
 ## Not implemented yet
 

@@ -23,6 +23,14 @@ Legend: **done**, *foundation*, planned.
 11. *BIOS/UEFI physical-disk installation, global allocator, serial-console
     input, native FAT32 formatting/LFN boot configuration, progress reporting,
     and hardware safeguards*
+12. Live xHCI class I/O: USB keyboard/mouse interrupt endpoints, one-level
+    hubs, Bulk-Only/SCSI mass storage, disconnect handling, and `/dev/usbN`
+13. Filesystem-backed userspace: mount NexFS as root, load ELF64 programs from
+    disk, make the ring-3 shell the default prompt, and execute core commands
+14. SMP and platform completion: application-processor startup, per-CPU
+    scheduling, HPET clock use, PCI ECAM, and FADT power-off/reboot
+15. Storage and hardware expansion: NVMe, 4Kn media, broader recovery/hotplug,
+    physical-machine compatibility matrix, and longer stress testing
 
 ## Completed foundation acceptance
 
@@ -135,6 +143,9 @@ Legend: **done**, *foundation*, planned.
 - Installation progress is visible as a nine-step percentage bar, including
   partitioning, filesystem creation, both firmware boot paths, flushing, and
   read-back verification.
+- Every prerelease now repeats the complete guided install against a temporary
+  AHCI disk, removes the ISO, and requires both SeaBIOS and UEFI boots to reach
+  `nexos>` before assets can be published.
 
 The complete v1 described in the product plan is a long-running systems
 project. Physical hardware support in Milestone 11 is deliberately limited to

@@ -61,7 +61,8 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends make xorriso zip
+          sudo apt-get install --yes --no-install-recommends \
+            make ovmf qemu-system-x86 xorriso zip
 
       - name: Install pinned Rust toolchain
         shell: bash
@@ -176,6 +177,24 @@ jobs:
             -efi-boot-part --efi-boot-image --protective-msdos-label \
             "$staging" -o "$iso"
           "$limine/limine" bios-install "$iso"
+
+      - name: Verify in-OS install and no-ISO BIOS/UEFI boots
+        shell: bash
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          firmware="/usr/share/OVMF/OVMF_CODE.fd"
+          if [[ ! -f "$firmware" ]]; then
+            firmware="$(find /usr/share -type f -name OVMF_CODE.fd -print -quit)"
+          fi
+          if [[ -z "$firmware" || ! -f "$firmware" ]]; then
+            echo "OVMF_CODE.fd was not found after installing ovmf" >&2
+            exit 1
+          fi
+          python3 scripts/qemu-installer-smoke.py \
+            --iso "build/NexOS-v${VERSION}-x86_64.iso" \
+            --uefi-firmware "$firmware"
 
       - name: Generate checksums
         shell: bash

@@ -212,7 +212,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.11.1-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.11.2-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -965,7 +965,7 @@ impl<'a> Monitor<'a> {
         );
         self.write_line(
             FOREGROUND,
-            format_args!("diskutil plan disk<number>     - preview guided UEFI layout"),
+            format_args!("diskutil plan disk<number>     - preview guided BIOS/UEFI layout"),
         );
         self.write_line(
             FOREGROUND,
