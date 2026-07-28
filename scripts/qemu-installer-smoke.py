@@ -161,25 +161,17 @@ def main() -> int:
         type=pathlib.Path,
         default=pathlib.Path("qemu-system-x86_64"),
     )
-    parser.add_argument(
-        "--qemu-img",
-        type=pathlib.Path,
-        default=pathlib.Path("qemu-img"),
-    )
     parser.add_argument("--timeout", type=float, default=240)
     arguments = parser.parse_args()
 
     iso = arguments.iso.resolve(strict=True)
     firmware = arguments.uefi_firmware.resolve(strict=True)
     qemu = arguments.qemu
-    qemu_img = arguments.qemu_img
 
     with tempfile.TemporaryDirectory(prefix="nexos-installer-smoke-") as temporary:
         disk = pathlib.Path(temporary) / "installed.img"
-        subprocess.run(
-            [str(qemu_img), "create", "-f", "raw", str(disk), "256M"],
-            check=True,
-        )
+        with disk.open("wb") as image:
+            image.truncate(256 * 1024 * 1024)
 
         install_port = reserve_tcp_port()
         install_command = qemu_command(qemu, disk, install_port, iso=iso)
