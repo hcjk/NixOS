@@ -244,6 +244,109 @@ pub struct ConfigurationSummary {
     pub mass_storage: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClassEndpoint {
+    pub interface_number: u8,
+    pub descriptor: EndpointDescriptor,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MassStorageEndpoints {
+    pub interface_number: u8,
+    pub bulk_in: Option<EndpointDescriptor>,
+    pub bulk_out: Option<EndpointDescriptor>,
+}
+
+impl MassStorageEndpoints {
+    #[must_use]
+    pub const fn ready(self) -> bool {
+        self.bulk_in.is_some() && self.bulk_out.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ClassBindings {
+    pub keyboard: Option<ClassEndpoint>,
+    pub mouse: Option<ClassEndpoint>,
+    pub hub: Option<ClassEndpoint>,
+    pub mass_storage: Option<MassStorageEndpoints>,
+}
+
+pub fn classify_configuration(bytes: &[u8]) -> Result<ClassBindings, UsbError> {
+    let config = ConfigurationDescriptor::parse(bytes)?;
+    let total_length = usize::from(config.total_length);
+    if bytes.len() < total_length {
+        return Err(UsbError::BufferTooShort);
+    }
+
+    let mut bindings = ClassBindings::default();
+    let mut interface = None;
+    let mut descriptors = DescriptorIter::new(&bytes[..total_length]);
+    for descriptor in descriptors.by_ref() {
+        match descriptor.descriptor_type {
+            TYPE_INTERFACE => {
+                let parsed = InterfaceDescriptor::parse(descriptor.bytes)?;
+                interface = (parsed.alternate_setting == 0).then_some(parsed);
+                if parsed.is_mass_storage_bot() && bindings.mass_storage.is_none() {
+                    bindings.mass_storage = Some(MassStorageEndpoints {
+                        interface_number: parsed.number,
+                        bulk_in: None,
+                        bulk_out: None,
+                    });
+                }
+            }
+            TYPE_ENDPOINT => {
+                let endpoint = EndpointDescriptor::parse(descriptor.bytes)?;
+                let Some(interface) = interface else {
+                    continue;
+                };
+                if endpoint.transfer_type == TransferType::Interrupt
+                    && endpoint.direction == Direction::In
+                {
+                    let binding = ClassEndpoint {
+                        interface_number: interface.number,
+                        descriptor: endpoint,
+                    };
+                    if interface.is_hid_boot_keyboard() && bindings.keyboard.is_none() {
+                        bindings.keyboard = Some(binding);
+                    } else if interface.is_hid_boot_mouse() && bindings.mouse.is_none() {
+                        bindings.mouse = Some(binding);
+                    } else if interface.is_hub() && bindings.hub.is_none() {
+                        bindings.hub = Some(binding);
+                    }
+                } else if interface.is_mass_storage_bot()
+                    && endpoint.transfer_type == TransferType::Bulk
+                    && let Some(mass_storage) = bindings
+                        .mass_storage
+                        .as_mut()
+                        .filter(|binding| binding.interface_number == interface.number)
+                {
+                    match endpoint.direction {
+                        Direction::In if mass_storage.bulk_in.is_none() => {
+                            mass_storage.bulk_in = Some(endpoint);
+                        }
+                        Direction::Out if mass_storage.bulk_out.is_none() => {
+                            mass_storage.bulk_out = Some(endpoint);
+                        }
+                        Direction::In | Direction::Out => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if descriptors.failed() {
+        return Err(UsbError::InvalidDescriptor);
+    }
+    if bindings
+        .mass_storage
+        .is_some_and(|binding| !binding.ready())
+    {
+        bindings.mass_storage = None;
+    }
+    Ok(bindings)
+}
+
 pub fn summarize_configuration(bytes: &[u8]) -> Result<ConfigurationSummary, UsbError> {
     let config = ConfigurationDescriptor::parse(bytes)?;
     let total_length = usize::from(config.total_length);
@@ -340,5 +443,28 @@ mod tests {
         assert_eq!(endpoint.direction, Direction::In);
         assert_eq!(endpoint.transfer_type, TransferType::Interrupt);
         assert_eq!(endpoint.max_packet_size, 64);
+    }
+
+    #[test]
+    fn binds_boot_hid_and_mass_storage_endpoints() {
+        let bytes = [
+            9, 2, 73, 0, 3, 1, 0, 0x80, 50, // configuration
+            9, 4, 0, 0, 1, 3, 1, 1, 0, // boot keyboard
+            9, 0x21, 0x11, 1, 0, 1, 0x22, 63, 0, // HID
+            7, 5, 0x81, 3, 8, 0, 10, // interrupt IN
+            9, 4, 1, 0, 1, 3, 1, 2, 0, // boot mouse
+            7, 5, 0x82, 3, 4, 0, 8, // interrupt IN
+            9, 4, 2, 0, 2, 8, 6, 0x50, 0, // BOT/SCSI
+            7, 5, 0x03, 2, 0, 2, 0, // bulk OUT
+            7, 5, 0x84, 2, 0, 2, 0, // bulk IN
+        ];
+        let bindings = classify_configuration(&bytes).unwrap();
+        assert_eq!(bindings.keyboard.unwrap().descriptor.number, 1);
+        assert_eq!(bindings.mouse.unwrap().descriptor.number, 2);
+        let mass_storage = bindings.mass_storage.unwrap();
+        assert!(mass_storage.ready());
+        assert_eq!(mass_storage.interface_number, 2);
+        assert_eq!(mass_storage.bulk_out.unwrap().number, 3);
+        assert_eq!(mass_storage.bulk_in.unwrap().number, 4);
     }
 }

@@ -17,9 +17,10 @@ programs:
 - per-device input/output contexts, endpoint-zero transfer rings, and control
   buffers.
 
-NexOS uses bounded polling for the first USB release. Interrupt-driven event
-delivery can replace it without changing the higher-level descriptor and class
-interfaces.
+NexOS polls the event ring without blocking the monitor. HID and hub interrupt
+TRBs remain queued while control and bulk commands use bounded synchronous
+waits. Interrupt-driven delivery can later replace polling without changing
+the class interfaces.
 
 ## Enumeration
 
@@ -35,7 +36,7 @@ boot-HID, hub, or Bulk-Only mass-storage interfaces. `usbinfo` exposes
 controller capabilities and enumeration counters. `usbtest` submits another
 No-Op command and requires a successful Command Completion Event.
 
-## Class protocol cores
+## Live class I/O
 
 The shared `nexos-usb` crate contains allocation-free implementations for:
 
@@ -48,11 +49,22 @@ The shared `nexos-usb` crate contains allocation-free implementations for:
   TEST UNIT READY, REQUEST SENSE, READ CAPACITY(10), READ(10), WRITE(10), and
   SYNCHRONIZE CACHE(10) commands.
 
+The kernel binds the first compatible endpoint set for each interface:
+
+- Boot keyboards and mice use persistent nonblocking interrupt-IN transfers.
+- Hubs are powered, reset, and enumerated to one downstream level, including
+  route strings and transaction-translator parent information.
+- Bulk-Only devices use CBW/data/CSW transactions with SCSI INQUIRY,
+  READ CAPACITY(10), READ(10), WRITE(10), and SYNCHRONIZE CACHE(10).
+- USB disks implement the common block-device interface, appear as
+  `/dev/usbN`, and can be inspected or selected by `diskutil` and
+  `nex-install`.
+- Root and downstream disconnects retire their slots and make later block I/O
+  fail cleanly instead of touching removed hardware.
+
 ## Current boundary
 
-The v0.9.0-dev kernel addresses and configures root-port devices and identifies
-their class endpoints. Live interrupt polling for HID, downstream hub device
-enumeration, bulk transfer rings for mass storage, hotplug/disconnect recovery,
-and exposing USB disks through the storage manager remain follow-up work. Until
-those paths are complete, the PS/2 keyboard remains the interactive monitor
-input and USB mass-storage disks are identified but not mounted.
+Milestone 12 intentionally supports xHCI, boot-protocol HID, one external hub
+level, BOT/SCSI LUN zero, READ/WRITE(10), and media whose logical blocks fit in
+the 4 KiB transfer buffer. Reconnecting or attaching new devices after boot,
+multiple LUNs, UAS, USB audio, and EHCI/OHCI/UHCI remain future work.

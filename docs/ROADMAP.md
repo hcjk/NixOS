@@ -23,8 +23,8 @@ Legend: **done**, *foundation*, planned.
 11. *BIOS/UEFI physical-disk installation, global allocator, serial-console
     input, native FAT32 formatting/LFN boot configuration, progress reporting,
     and hardware safeguards*
-12. Live xHCI class I/O: USB keyboard/mouse interrupt endpoints, one-level
-    hubs, Bulk-Only/SCSI mass storage, disconnect handling, and `/dev/usbN`
+12. **Live xHCI class I/O: USB keyboard/mouse interrupt endpoints, one-level
+    hubs, Bulk-Only/SCSI mass storage, disconnect handling, and `/dev/usbN`**
 13. Filesystem-backed userspace: mount NexFS as root, load ELF64 programs from
     disk, make the ring-3 shell the default prompt, and execute core commands
 14. SMP and platform completion: application-processor startup, per-CPU
@@ -146,9 +146,15 @@ Legend: **done**, *foundation*, planned.
 - Every prerelease now repeats the complete guided install against a temporary
   AHCI disk, removes the ISO, and requires both SeaBIOS and UEFI boots to reach
   `nexos>` before assets can be published.
+- Class-aware xHCI endpoint contexts and transfer rings drive boot-protocol
+  keyboards and mice without PS/2, enumerate one downstream hub level, and
+  expose writable BOT/SCSI media as `/dev/usbN`.
+- The USB release gate installs NexOS onto a hub-attached USB disk, injects
+  keyboard and mouse events with i8042 disabled, reads and writes the device,
+  and verifies disconnect reporting.
 
 The complete v1 described in the product plan is a long-running systems
 project. Physical hardware support in Milestone 11 is deliberately limited to
 BIOS or UEFI, AHCI/legacy IDE, 512-byte logical sectors, framebuffer output,
-and PS/2/i8042 or COM1 input. SMP, live USB HID/mass-storage transfers, NVMe,
-and filesystem-backed ring-3 userspace remain later stabilization work.
+and PS/2/i8042, USB boot-HID, or COM1 input. SMP, NVMe, hotplug
+re-enumeration, and filesystem-backed ring-3 userspace remain later work.

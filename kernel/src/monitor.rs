@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::arch::asm;
 use core::fmt::{self, Write};
 
@@ -143,11 +144,17 @@ impl<'a> Monitor<'a> {
                 if let Some(character) = self
                     .keyboard
                     .read_character()
+                    .or_else(|| self.usb.poll_keyboard_character())
                     .or_else(|| self.serial.read_byte())
                 {
                     match character {
                         b'\n' => {
                             self.write_both(format_args!("\n"));
+                            break;
+                        }
+                        3 => {
+                            self.write_both(format_args!("^C\n"));
+                            length = 0;
                             break;
                         }
                         8 if length > 0 => {
@@ -212,7 +219,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.11.2-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.12.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -708,10 +715,12 @@ impl<'a> Monitor<'a> {
         );
         let mut found = false;
         for controller_index in 0..self.usb.controller_count() {
-            let Some(controller) = self.usb.controller(controller_index).copied() else {
+            let Some(controller) = self.usb.controller(controller_index) else {
                 continue;
             };
-            for device in controller.devices().iter().copied() {
+            let devices = Vec::from(controller.devices());
+            let ports = Vec::from(controller.ports());
+            for device in devices.iter().copied() {
                 found = true;
                 self.write_line(
                     FOREGROUND,
@@ -744,14 +753,20 @@ impl<'a> Monitor<'a> {
                         device.summary.mass_storage
                     ),
                 );
+                self.write_line(
+                    MUTED,
+                    format_args!(
+                        "  live: connected={} keyboard={} mouse={} hub-ports={} usb-disk={}",
+                        yes_no(device.connected),
+                        yes_no(device.keyboard_online),
+                        yes_no(device.mouse_online),
+                        device.hub_ports,
+                        yes_no(device.mass_storage_online)
+                    ),
+                );
             }
-            for port in controller.ports().iter().copied() {
-                if !port.connected
-                    || controller
-                        .devices()
-                        .iter()
-                        .any(|device| device.root_port == port.number)
-                {
+            for port in ports.iter().copied() {
+                if !port.connected || devices.iter().any(|device| device.root_port == port.number) {
                     continue;
                 }
                 found = true;
@@ -792,27 +807,52 @@ impl<'a> Monitor<'a> {
                 stats.command_completions
             ),
         );
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "classes: keyboards={}, mice={}, hubs={}, USB disks={}, input-events={}, storage-commands={}, disconnects={}",
+                stats.hid_keyboards,
+                stats.hid_mice,
+                stats.hubs,
+                stats.mass_storage_devices,
+                stats.input_events,
+                stats.storage_commands,
+                stats.disconnects
+            ),
+        );
         for index in 0..self.usb.controller_count() {
-            let Some(controller) = self.usb.controller(index).copied() else {
+            let Some(controller) = self.usb.controller(index) else {
                 continue;
             };
+            let bus = controller.bus;
+            let device = controller.device;
+            let function = controller.function;
+            let vendor_id = controller.vendor_id;
+            let device_id = controller.device_id;
+            let version = controller.version;
+            let max_slots = controller.max_slots;
+            let max_interrupters = controller.max_interrupters;
+            let context_bytes = controller.context_bytes;
+            let supports_64_bit = controller.supports_64_bit;
+            let scratchpads = controller.scratchpads;
+            let no_op_completion = controller.no_op_completion;
             self.write_line(
                 FOREGROUND,
                 format_args!(
                     "xhci{index}: {:02x}:{:02x}.{} {:04x}:{:04x}, HCIVERSION={}.{:02}, slots={}, interrupters={}, context={}B, AC64={}, scratchpads={}, no-op={}",
-                    controller.bus,
-                    controller.device,
-                    controller.function,
-                    controller.vendor_id,
-                    controller.device_id,
-                    controller.version >> 8,
-                    controller.version & 0xff,
-                    controller.max_slots,
-                    controller.max_interrupters,
-                    controller.context_bytes,
-                    yes_no(controller.supports_64_bit),
-                    controller.scratchpads,
-                    controller.no_op_completion
+                    bus,
+                    device,
+                    function,
+                    vendor_id,
+                    device_id,
+                    version >> 8,
+                    version & 0xff,
+                    max_slots,
+                    max_interrupters,
+                    context_bytes,
+                    yes_no(supports_64_bit),
+                    scratchpads,
+                    no_op_completion
                 ),
             );
         }
@@ -877,15 +917,17 @@ impl<'a> Monitor<'a> {
         self.write_line(
             FOREGROUND,
             format_args!(
-                "block devices: {count} (AHCI={}, IDE={})",
+                "block devices: {count} (AHCI={}, IDE={}, USB={})",
                 self.storage.ahci_count(),
-                self.storage.ide_count()
+                self.storage.ide_count(),
+                self.storage.usb_count()
             ),
         );
         for index in 0..count {
             let Some(device) = self.storage.device(index) else {
                 continue;
             };
+            let node = self.storage.device_node(index);
             let sectors = device.sector_count();
             let sector_size = device.sector_size();
             let capacity_mib = sectors.saturating_mul(u64::from(sector_size)) / 1024 / 1024;
@@ -899,15 +941,32 @@ impl<'a> Monitor<'a> {
                 DeviceLocation::AhciPort { port, version } => self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "disk{index}: {kind}, AHCI {version:#010x} port {port}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        "disk{index} (/dev/{}{}): {kind}, AHCI {version:#010x} port {port}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        node.map_or("disk", |node| node.prefix),
+                        node.map_or(index, |node| node.ordinal),
                         Ascii(&model[..model_length])
                     ),
                 ),
                 DeviceLocation::IdePosition { slave } => self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "disk{index}: {kind}, IDE {}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        "disk{index} (/dev/{}{}): {kind}, IDE {}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        node.map_or("disk", |node| node.prefix),
+                        node.map_or(index, |node| node.ordinal),
                         if slave { "slave" } else { "master" },
+                        Ascii(&model[..model_length])
+                    ),
+                ),
+                DeviceLocation::UsbPosition {
+                    controller,
+                    slot,
+                    root_port,
+                } => self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "disk{index} (/dev/{}{}): {kind}, xhci{controller} slot {slot} root-port {root_port}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        node.map_or("usb", |node| node.prefix),
+                        node.map_or(index, |node| node.ordinal),
                         Ascii(&model[..model_length])
                     ),
                 ),
@@ -1287,20 +1346,29 @@ impl<'a> Monitor<'a> {
 
     fn print_mouse(&mut self) {
         self.mouse.drain();
-        let total = self.mouse.total_events();
+        let ps2_total = self.mouse.total_events();
+        let usb_total = self.usb.mouse_events();
         if let Some(event) = self.mouse.latest() {
             self.write_line(
                 FOREGROUND,
                 format_args!(
-                    "mouse events={total}, last dx={}, dy={}, buttons={:#05b}",
+                    "PS/2 mouse events={ps2_total}, last dx={}, dy={}, buttons={:#05b}",
                     event.delta_x, event.delta_y, event.buttons
                 ),
             );
-        } else {
+        } else if ps2_total == 0 {
+            self.write_line(MUTED, format_args!("PS/2 mouse events=0"));
+        }
+        if let Some(event) = self.usb.latest_mouse() {
             self.write_line(
-                MUTED,
-                format_args!("mouse events=0; move or click the PS/2 mouse, then retry"),
+                FOREGROUND,
+                format_args!(
+                    "USB mouse events={usb_total}, last dx={}, dy={}, wheel={}, buttons={:#07b}",
+                    event.delta_x, event.delta_y, event.wheel, event.buttons
+                ),
             );
+        } else if usb_total == 0 {
+            self.write_line(MUTED, format_args!("USB mouse events=0"));
         }
     }
 

@@ -8,6 +8,63 @@ pub struct KeyboardReport {
     pub keys: [u8; 6],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KeyboardEvent {
+    pub usage: u8,
+    pub ascii: Option<u8>,
+    pub control: bool,
+    pub alt: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BootKeyboard {
+    previous: KeyboardReport,
+    caps_lock: bool,
+}
+
+impl BootKeyboard {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            previous: KeyboardReport {
+                modifiers: 0,
+                keys: [0; 6],
+            },
+            caps_lock: false,
+        }
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) -> Result<Option<KeyboardEvent>, UsbError> {
+        let report = KeyboardReport::parse(bytes)?;
+        let pressed = report
+            .keys
+            .iter()
+            .copied()
+            .find(|usage| report.key_pressed_since(self.previous, *usage));
+        self.previous = report;
+        let Some(usage) = pressed else {
+            return Ok(None);
+        };
+        if usage == 0x39 {
+            self.caps_lock = !self.caps_lock;
+            return Ok(None);
+        }
+        let shift = report.left_shift() || report.right_shift();
+        let letter = (0x04..=0x1d).contains(&usage);
+        Ok(Some(KeyboardEvent {
+            usage,
+            ascii: boot_key_ascii(usage, shift ^ (letter && self.caps_lock)),
+            control: report.modifiers & 0x11 != 0,
+            alt: report.modifiers & 0x44 != 0,
+        }))
+    }
+
+    #[must_use]
+    pub const fn caps_lock(self) -> bool {
+        self.caps_lock
+    }
+}
+
 impl KeyboardReport {
     pub fn parse(bytes: &[u8]) -> Result<Self, UsbError> {
         if bytes.len() < KEYBOARD_REPORT_BYTES {
@@ -132,5 +189,30 @@ mod tests {
         assert_eq!(report.delta_x, -2);
         assert_eq!(report.delta_y, 4);
         assert_eq!(report.wheel, -1);
+    }
+
+    #[test]
+    fn boot_keyboard_tracks_releases_modifiers_and_caps_lock() {
+        let mut keyboard = BootKeyboard::new();
+        let first = keyboard.update(&[0, 0, 4, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(first.unwrap().ascii, Some(b'a'));
+        assert!(
+            keyboard
+                .update(&[0, 0, 4, 0, 0, 0, 0, 0])
+                .unwrap()
+                .is_none()
+        );
+        assert!(keyboard.update(&[0; 8]).unwrap().is_none());
+        assert!(
+            keyboard
+                .update(&[0, 0, 0x39, 0, 0, 0, 0, 0])
+                .unwrap()
+                .is_none()
+        );
+        assert!(keyboard.caps_lock());
+        keyboard.update(&[0; 8]).unwrap();
+        let capital = keyboard.update(&[1, 0, 4, 0, 0, 0, 0, 0]).unwrap().unwrap();
+        assert_eq!(capital.ascii, Some(b'A'));
+        assert!(capital.control);
     }
 }

@@ -80,6 +80,15 @@ Last verified: 2026-07-28
 - A reusable `no_std` USB library covering descriptor validation,
   enumeration states, xHCI TRB rings, HID boot keyboard/mouse reports,
   one-level hub descriptors/status, and mass-storage BOT/SCSI commands.
+- Descriptor-driven xHCI endpoint contexts and DMA rings for nonblocking HID
+  and hub interrupt-IN transfers plus synchronous bulk transfers.
+- Live USB boot keyboard and mouse input, including modifiers, Caps Lock,
+  wheel movement, and button events.
+- One-level hub port power, reset, status, route-string, and downstream-device
+  enumeration.
+- Writable USB BOT/SCSI block devices with INQUIRY, READ CAPACITY(10),
+  READ(10), WRITE(10), cache synchronization, `/dev/usbN` naming, and
+  disconnect retirement.
 - Image-only `diskutil` workflows for GPT/MBR layout creation and inspection,
   partition creation/deletion, FAT32/NexFS formatting, and filesystem checks.
 - Guided combined BIOS/UEFI, UEFI-only, and BIOS-only `nex-install` modes,
@@ -182,16 +191,24 @@ publication gate. It creates a temporary disk, drives `nex-install` over COM1,
 waits for the verified 100% step, then starts two fresh QEMU processes without
 the ISO and requires each firmware path to reach `nexos>`.
 
+The milestone-12 QEMU test disables i8042, attaches a keyboard, mouse, and
+256 MiB mass-storage device through an eight-port xHCI hub, then types `uname`
+through USB, injects mouse movement, detects `/dev/usb0`, reads the disk,
+installs NexOS onto it through BOT/SCSI, verifies the result, and removes the
+device. Hub, HID, block writes, cache flush, and disconnect accounting all
+complete before release publication.
+
 ## Not implemented yet
 
 Page-table frame reclamation, HPET clock use, PCI ECAM access, power-off
 through the FADT, SMP, file-backed kernel VFS mounts, general userspace
-executables, a filesystem-backed shell, live USB HID interrupt input,
-downstream hub enumeration, USB mass-storage block transfers, hotplug, NVMe,
-general FAT32 long-file-name creation, and NexFS journaling remain later work.
+executables, a filesystem-backed shell, USB hotplug re-enumeration, multiple
+USB LUNs, UAS, EHCI/OHCI/UHCI, NVMe, general FAT32 long-file-name creation,
+and NexFS journaling remain later work.
 
 The in-OS installer is a deliberately narrow real-hardware preview: BIOS or
-UEFI x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI or legacy
-IDE, whole-disk guided layout, and PS/2/i8042 or COM1 input. It does not
-preserve partitions, resize filesystems, drive USB storage, detect software
-RAID, or support NVMe/4Kn targets. The host-side tools still refuse raw disks.
+UEFI x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI, legacy IDE,
+or xHCI BOT/SCSI storage, whole-disk guided layout, and PS/2, USB boot-HID, or
+COM1 input. It does not preserve partitions, resize filesystems, detect
+software RAID, or support NVMe/4Kn targets. The host-side tools still refuse
+raw disks.

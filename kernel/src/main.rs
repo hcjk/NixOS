@@ -100,7 +100,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.11.2-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.12.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -221,7 +221,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.11.2-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.12.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -292,13 +292,15 @@ extern "C" fn kernel_main() -> ! {
         usb_stats.command_completions,
         usb_stats.last_error
     );
-    let mut storage = storage::StorageManager::discover(&pci, &mut paging, &mut allocator);
+    let mut storage =
+        storage::StorageManager::discover(&pci, &mut paging, &mut allocator, &mut usb);
     let _ = writeln!(
         serial,
-        "storage: {} disks (AHCI={}, IDE={})",
+        "storage: {} disks (AHCI={}, IDE={}, USB={})",
         storage.count(),
         storage.ahci_count(),
-        storage.ide_count()
+        storage.ide_count(),
+        storage.usb_count()
     );
     let ahci_probe = storage.ahci_probe();
     let _ = writeln!(
@@ -327,7 +329,7 @@ extern "C" fn kernel_main() -> ! {
     }
     let _ = writeln!(
         serial,
-        "milestone 11 hardware installer ready; entering kernel monitor"
+        "milestone 12 live USB class I/O ready; entering kernel monitor"
     );
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
@@ -337,10 +339,11 @@ extern "C" fn kernel_main() -> ! {
     );
     let _ = writeln!(
         console,
-        "[ok] storage: {} disks (AHCI {}, IDE {})",
+        "[ok] storage: {} disks (AHCI {}, IDE {}, USB {})",
         storage.count(),
         storage.ahci_count(),
-        storage.ide_count()
+        storage.ide_count(),
+        storage.usb_count()
     );
     let _ = writeln!(
         console,

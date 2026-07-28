@@ -5,13 +5,16 @@ use crate::ide::{self, IdeDevice};
 use crate::memory::FrameAllocator;
 use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
+use crate::usb::UsbManager;
+use crate::xhci::{MAX_USB_STORAGE_DEVICES, UsbMassStorageDevice};
 
-const MAX_STORAGE_DEVICES: usize = 8;
+const MAX_STORAGE_DEVICES: usize = 16;
 
 #[derive(Clone, Copy)]
 pub enum StorageDevice {
     Ahci(AhciDevice),
     Ide(IdeDevice),
+    Usb(UsbMassStorageDevice),
 }
 
 impl StorageDevice {
@@ -20,6 +23,7 @@ impl StorageDevice {
         match self {
             Self::Ahci(_) => "sata-ahci",
             Self::Ide(_) => "ide-pio",
+            Self::Usb(_) => "usb-bot-scsi",
         }
     }
 
@@ -28,6 +32,7 @@ impl StorageDevice {
         match self {
             Self::Ahci(device) => device.model_bytes(),
             Self::Ide(device) => device.model_bytes(),
+            Self::Usb(device) => device.model_bytes(),
         }
     }
 
@@ -41,6 +46,11 @@ impl StorageDevice {
             Self::Ide(device) => DeviceLocation::IdePosition {
                 slave: device.is_slave(),
             },
+            Self::Usb(device) => DeviceLocation::UsbPosition {
+                controller: device.controller_index(),
+                slot: device.slot_id(),
+                root_port: device.root_port(),
+            },
         }
     }
 }
@@ -50,6 +60,7 @@ impl BlockDevice for StorageDevice {
         match self {
             Self::Ahci(device) => device.sector_size(),
             Self::Ide(device) => device.sector_size(),
+            Self::Usb(device) => device.sector_size(),
         }
     }
 
@@ -57,6 +68,7 @@ impl BlockDevice for StorageDevice {
         match self {
             Self::Ahci(device) => device.sector_count(),
             Self::Ide(device) => device.sector_count(),
+            Self::Usb(device) => device.sector_count(),
         }
     }
 
@@ -64,6 +76,7 @@ impl BlockDevice for StorageDevice {
         match self {
             Self::Ahci(device) => device.read_sectors(lba, output),
             Self::Ide(device) => device.read_sectors(lba, output),
+            Self::Usb(device) => device.read_sectors(lba, output),
         }
     }
 
@@ -71,6 +84,7 @@ impl BlockDevice for StorageDevice {
         match self {
             Self::Ahci(device) => device.write_sectors(lba, input),
             Self::Ide(device) => device.write_sectors(lba, input),
+            Self::Usb(device) => device.write_sectors(lba, input),
         }
     }
 
@@ -78,14 +92,31 @@ impl BlockDevice for StorageDevice {
         match self {
             Self::Ahci(device) => device.flush(),
             Self::Ide(device) => device.flush(),
+            Self::Usb(device) => device.flush(),
         }
     }
 }
 
 #[derive(Clone, Copy)]
 pub enum DeviceLocation {
-    AhciPort { port: u8, version: u32 },
-    IdePosition { slave: bool },
+    AhciPort {
+        port: u8,
+        version: u32,
+    },
+    IdePosition {
+        slave: bool,
+    },
+    UsbPosition {
+        controller: u8,
+        slot: u8,
+        root_port: u8,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub struct DeviceNode {
+    pub prefix: &'static str,
+    pub ordinal: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -108,6 +139,7 @@ pub struct StorageManager {
     count: usize,
     ahci_count: usize,
     ide_count: usize,
+    usb_count: usize,
     ahci_probe: AhciProbeStats,
 }
 
@@ -117,12 +149,14 @@ impl StorageManager {
         inventory: &PciInventory,
         paging: &mut PagingInfo,
         allocator: &mut FrameAllocator,
+        usb: &mut UsbManager,
     ) -> Self {
         let mut manager = Self {
             devices: [None; MAX_STORAGE_DEVICES],
             count: 0,
             ahci_count: 0,
             ide_count: 0,
+            usb_count: 0,
             ahci_probe: AhciProbeStats::default(),
         };
 
@@ -150,6 +184,18 @@ impl StorageManager {
             manager.push(StorageDevice::Ide(device));
             manager.ide_count += 1;
         }
+
+        let mut usb_devices = [None; MAX_USB_STORAGE_DEVICES];
+        let usb_count = usb.mass_storage_devices(&mut usb_devices);
+        for device in usb_devices
+            .into_iter()
+            .take(usb_count)
+            .flatten()
+            .take(MAX_STORAGE_DEVICES - manager.count)
+        {
+            manager.push(StorageDevice::Usb(device));
+            manager.usb_count += 1;
+        }
         manager
     }
 
@@ -169,6 +215,11 @@ impl StorageManager {
     }
 
     #[must_use]
+    pub const fn usb_count(&self) -> usize {
+        self.usb_count
+    }
+
+    #[must_use]
     pub const fn ahci_probe(&self) -> AhciProbeStats {
         self.ahci_probe
     }
@@ -180,6 +231,29 @@ impl StorageManager {
 
     pub fn device_mut(&mut self, index: usize) -> Option<&mut StorageDevice> {
         self.devices.get_mut(index)?.as_mut()
+    }
+
+    #[must_use]
+    pub fn device_node(&self, index: usize) -> Option<DeviceNode> {
+        let device = self.device(index)?;
+        let prefix = match device {
+            StorageDevice::Ahci(_) => "sata",
+            StorageDevice::Ide(_) => "ide",
+            StorageDevice::Usb(_) => "usb",
+        };
+        let ordinal = self.devices[..index]
+            .iter()
+            .flatten()
+            .filter(|candidate| {
+                matches!(
+                    (device, candidate),
+                    (StorageDevice::Ahci(_), StorageDevice::Ahci(_))
+                        | (StorageDevice::Ide(_), StorageDevice::Ide(_))
+                        | (StorageDevice::Usb(_), StorageDevice::Usb(_))
+                )
+            })
+            .count();
+        Some(DeviceNode { prefix, ordinal })
     }
 
     pub fn probe_partitions(&mut self, index: usize) -> PartitionProbe {

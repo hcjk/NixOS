@@ -36,9 +36,9 @@ preview:
   quoting, environment expansion, history, pipelines, and redirection; and
 - a 45-command Unix-inspired registry covering file, system, storage, and
   utility commands; and
-- a polling xHCI controller with firmware handoff, DMA command/event rings,
-  root-port reset, USB device addressing/configuration, descriptor-based class
-  discovery, and tested HID, hub, and mass-storage protocol primitives.
+- a polling xHCI controller with firmware handoff, DMA command/event and class
+  transfer rings, root and one-level hub enumeration, live USB boot keyboard
+  and mouse input, and writable BOT/SCSI mass-storage devices;
 - safe image-only `diskutil` and `nex-install` executables with GPT/MBR
   editing, FAT32/NexFS formatting, guided and manual installs, exact-target
   confirmation, transactional replacement, and post-install verification; and
@@ -46,8 +46,8 @@ preview:
   confirmed `nex-install` path for 512-byte-sector AHCI/IDE disks on UEFI
   x86-64 hardware.
 
-Live USB class endpoint I/O, filesystem-backed ring-3 command execution, and
-broader storage-controller support remain tracked work. See
+Filesystem-backed ring-3 command execution, SMP, and broader
+storage-controller support remain tracked work. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -168,11 +168,14 @@ At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
 and exits back to the monitor. `disktest` is read-only: it reads LBA 0, reports
 its CRC32, and never writes the disk. The Unix-like shell frontend is present,
 but the filesystem-backed ring-3 shell is not yet the default prompt.
-The monitor accepts input from PS/2/i8042 keyboards and COM1.
+The monitor accepts input from PS/2/i8042, USB boot-protocol keyboards, and
+COM1. USB mice generate events, and BOT/SCSI disks appear as `/dev/usbN`.
 
-Release builds also run `scripts/qemu-installer-smoke.py`. The test performs a
-fresh in-OS install and refuses publication unless the installed disk boots
-without its ISO under both SeaBIOS and UEFI.
+Release builds run `scripts/qemu-installer-smoke.py` and
+`scripts/qemu-usb-smoke.py`. Publication requires a fresh in-OS install that
+boots without its ISO under SeaBIOS and UEFI, plus live USB-only keyboard and
+mouse input, one-level hub enumeration, USB-disk installation, and disconnect
+handling.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

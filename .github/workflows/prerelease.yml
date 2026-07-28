@@ -199,6 +199,15 @@ jobs:
             --iso "build/NexOS-v${VERSION}-x86_64.iso" \
             --uefi-firmware "$firmware"
 
+      - name: Verify live xHCI hub, HID, storage, and disconnect I/O
+        shell: bash
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qemu-usb-smoke.py \
+            --iso "build/NexOS-v${VERSION}-x86_64.iso"
+
       - name: Generate checksums
         shell: bash
         env:
