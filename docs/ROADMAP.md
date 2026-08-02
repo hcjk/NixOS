@@ -28,8 +28,9 @@ Legend: **done**, *foundation*, planned.
 13. **Filesystem-backed userspace: mount NexFS as root, load ELF64 programs
     from disk, make the ring-3 shell the default prompt, and execute core
     commands**
-14. SMP and platform completion: application-processor startup, per-CPU
-    scheduling, HPET clock use, PCI ECAM, and FADT power-off/reboot
+14. **SMP and platform completion: application-processor startup, per-CPU
+    state/scheduler accounting, HPET clock use, PCI ECAM, and FADT
+    power-off/reboot**
 15. Storage and hardware expansion: NVMe, 4Kn media, broader recovery/hotplug,
     physical-machine compatibility matrix, and longer stress testing
 
@@ -161,10 +162,22 @@ Legend: **done**, *foundation*, planned.
 - The release gate removes the ISO, boots the same disk through SeaBIOS and
   UEFI, and requires ring-3 `uname`, `cat /etc/nexos-release`, and `ls /` to
   succeed before publication.
+- Limine releases up to 63 application processors into a NexOS entrypoint;
+  each loads the shared kernel GDT/IDT, enables its local APIC, publishes
+  per-CPU online state, and sleeps in an interruptible idle loop.
+- ACPI HPET capabilities and period are validated before its main counter
+  becomes the monotonic clock, with the 100 Hz PIT retained for scheduler
+  ticks and as a clock fallback.
+- MCFG segment-zero systems enumerate PCI functions through page-scoped,
+  uncached ECAM mappings, with configuration mechanism 1 as a fallback.
+- FADT reset and PM1 control registers plus AML `_S5_` sleep types drive
+  kernel-monitor and ring-3 `reboot`/`shutdown` commands.
+- A four-CPU QEMU release gate verifies SMP, HPET, ECAM diagnostics and real
+  ACPI S5 exit under both SeaBIOS and UEFI.
 
 The complete v1 described in the product plan is a long-running systems
 project. Physical hardware support in Milestone 11 is deliberately limited to
 BIOS or UEFI, AHCI/legacy IDE, 512-byte logical sectors, framebuffer output,
-and PS/2/i8042, USB boot-HID, or COM1 input. SMP, NVMe, hotplug
+and PS/2/i8042, USB boot-HID, or COM1 input. AP task migration, NVMe, hotplug
 re-enumeration, multiprocess pipelines, and broader hardware validation remain
 later work.

@@ -83,6 +83,22 @@ pub fn init() {
     }
 }
 
+pub fn load_on_application_processor() {
+    let selectors = selectors();
+    // SAFETY: The boot CPU completed the immutable shared GDT before starting
+    // application processors. APs remain in ring 0 and do not load the shared
+    // TSS because each future user-capable CPU requires its own TSS.
+    unsafe {
+        (&*GDT.0.get()).load_unsafe();
+        let code = x86_64::structures::gdt::SegmentSelector(selectors.kernel_code);
+        let data = x86_64::structures::gdt::SegmentSelector(selectors.kernel_data);
+        CS::set_reg(code);
+        SS::set_reg(data);
+        DS::set_reg(data);
+        ES::set_reg(data);
+    }
+}
+
 #[must_use]
 pub fn selectors() -> Selectors {
     Selectors {

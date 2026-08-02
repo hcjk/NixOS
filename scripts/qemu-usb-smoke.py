@@ -174,6 +174,8 @@ def main() -> int:
             "q35,i8042=off",
             "-accel",
             "tcg",
+            "-smp",
+            "4",
             "-m",
             "512M",
             "-drive",

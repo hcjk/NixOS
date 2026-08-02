@@ -73,10 +73,25 @@ mod freestanding {
         let (command, arguments) = split_once(line);
         match command {
             b"help" => write_all(
-                b"Commands: help uname pwd echo ls cat stat clear exit\n\
+                b"Commands: help uname smpinfo uptime pwd echo ls cat stat clear shutdown reboot exit\n\
                   Programs and system files are loaded from the mounted NexFS root.\n",
             ),
-            b"uname" => write_all(b"NexOS 0.13.0-dev x86_64 (ring-3 userspace)\n"),
+            b"uname" => write_all(b"NexOS 0.14.0-dev x86_64 (ring-3 userspace)\n"),
+            b"smpinfo" => {
+                write_all(b"processors: registered=");
+                write_u64(runtime::processor_count().unwrap_or(0));
+                write_all(b" online=");
+                write_u64(runtime::online_processor_count().unwrap_or(0));
+                write_all(b"\n");
+            }
+            b"uptime" => {
+                let milliseconds = runtime::uptime_milliseconds().unwrap_or(0);
+                write_all(b"uptime: ");
+                write_u64(milliseconds / 1000);
+                write_all(b".");
+                write_padded_milliseconds(milliseconds % 1000);
+                write_all(b" seconds\n");
+            }
             b"pwd" => write_all(b"/\n"),
             b"echo" => {
                 write_all(arguments);
@@ -102,6 +117,18 @@ mod freestanding {
                 }
             }
             b"clear" => write_all(b"\x1b[2J\x1b[H"),
+            b"shutdown" => {
+                write_all(b"Requesting ACPI shutdown...\n");
+                if runtime::shutdown().is_err() {
+                    write_all(b"shutdown: ACPI power-off failed\n");
+                }
+            }
+            b"reboot" => {
+                write_all(b"Requesting ACPI reset...\n");
+                if runtime::reboot().is_err() {
+                    write_all(b"reboot: reset failed\n");
+                }
+            }
             b"exit" => return true,
             _ => write_all(b"command not found; type 'help'\n"),
         }
@@ -203,6 +230,13 @@ mod freestanding {
             value >>= 3;
         }
         write_all(&output);
+    }
+
+    fn write_padded_milliseconds(value: u64) {
+        let hundreds = u8::try_from((value / 100) % 10).unwrap_or(0);
+        let tens = u8::try_from((value / 10) % 10).unwrap_or(0);
+        let ones = u8::try_from(value % 10).unwrap_or(0);
+        write_all(&[b'0' + hundreds, b'0' + tens, b'0' + ones]);
     }
 
     fn trim(mut bytes: &[u8]) -> &[u8] {

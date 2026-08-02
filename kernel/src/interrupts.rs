@@ -113,7 +113,21 @@ pub fn ticks() -> u64 {
 
 #[must_use]
 pub fn uptime_milliseconds() -> u64 {
-    ticks().saturating_mul(1000) / PIT_FREQUENCY_HZ
+    crate::hpet::milliseconds().unwrap_or_else(|| ticks().saturating_mul(1000) / PIT_FREQUENCY_HZ)
+}
+
+#[must_use]
+pub fn clock_source_name() -> &'static str {
+    if crate::hpet::available() {
+        "HPET"
+    } else {
+        "PIT"
+    }
+}
+
+#[must_use]
+pub fn clock_frequency_hz() -> u64 {
+    crate::hpet::frequency_hz().unwrap_or(PIT_FREQUENCY_HZ)
 }
 
 pub fn wait_for_interrupt() {
@@ -129,6 +143,12 @@ pub fn wait_for_interrupt_from_syscall() {
     // SAFETY: The IDT and interrupt controllers are initialized before any
     // userspace process can issue a blocking Read syscall.
     unsafe { asm!("sti", "hlt", "cli", options(nomem, nostack)) };
+}
+
+pub fn load_idt_on_application_processor() {
+    // SAFETY: The BSP finished the IDT before Limine releases any AP into the
+    // NexOS entrypoint, and the table is immutable afterward.
+    unsafe { (&*IDT.0.get()).load_unsafe() };
 }
 
 pub fn trigger_breakpoint() {
@@ -183,6 +203,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
 extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
     let tick = TICKS.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    crate::smp::record_scheduler_tick();
     crate::runtime::on_timer_tick(tick);
     // SAFETY: IRQ0 came from the master PIC.
     unsafe { end_of_interrupt(0) };

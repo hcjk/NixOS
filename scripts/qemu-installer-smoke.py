@@ -82,6 +82,20 @@ class QemuSession:
     def tail(self) -> str:
         return bytes(self.transcript[-4096:]).decode("utf-8", errors="replace")
 
+    def wait_for_exit(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while self.process.poll() is None and time.monotonic() < deadline:
+            try:
+                chunk = self.socket.recv(4096)
+                if chunk:
+                    self.transcript.extend(chunk)
+            except (TimeoutError, OSError):
+                pass
+        if self.process.poll() is None:
+            raise TimeoutError(f"QEMU did not exit after shutdown\n{self.tail()}")
+        if self.process.returncode != 0:
+            raise RuntimeError(f"QEMU exited with {self.process.returncode}\n{self.tail()}")
+
     def close(self) -> None:
         try:
             self.socket.close()
@@ -115,6 +129,8 @@ def qemu_command(
         "q35",
         "-accel",
         "tcg",
+        "-smp",
+        "4",
         "-m",
         "512M",
     ]
@@ -157,13 +173,24 @@ def boot_and_require_prompt(
         session.wait_for(b"nexsh>", timeout)
         if b"rootfs: launching /bin/nexsh" not in session.transcript:
             raise RuntimeError(f"{label} boot did not launch the NexFS userspace shell")
+        if b"SMP: requested=4, registered=4, online=4" not in session.transcript:
+            raise RuntimeError(f"{label} boot did not start all four CPUs")
         session.type_command("uname")
-        session.wait_for(b"NexOS 0.13.0-dev x86_64 (ring-3 userspace)", timeout)
+        session.wait_for(b"NexOS 0.14.0-dev x86_64 (ring-3 userspace)", timeout)
         session.type_command("cat /etc/nexos-release")
-        session.wait_for(b"VERSION=0.13.0-dev", timeout)
+        session.wait_for(b"VERSION=0.14.0-dev", timeout)
         session.type_command("ls /")
         session.wait_for(b"home/", timeout)
-        print(f"{label} installed-disk boot reached and exercised /bin/nexsh")
+        session.type_command("smpinfo")
+        session.wait_for(b"registered=4 online=4", timeout)
+        session.type_command("uptime")
+        session.wait_for(b"seconds", timeout)
+        session.type_command("shutdown")
+        session.wait_for(b"Requesting ACPI shutdown", timeout)
+        session.wait_for_exit(20)
+        print(
+            f"{label} installed-disk boot exercised /bin/nexsh and ACPI shutdown"
+        )
 
 
 def main() -> int:

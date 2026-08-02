@@ -1,4 +1,4 @@
-use nexos_abi::{DirectoryEntry, Error, FileStat, Syscall};
+use nexos_abi::{DirectoryEntry, Error, FileStat, Syscall, SystemInfoSelector};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SyscallResult(pub i64);
@@ -14,7 +14,7 @@ impl SyscallResult {
 
 #[cfg(target_os = "none")]
 #[must_use]
-/// Issues one raw NexOS syscall.
+/// Issues one raw `NexOS` syscall.
 ///
 /// # Safety
 ///
@@ -39,7 +39,7 @@ pub unsafe fn syscall(number: Syscall, arguments: [u64; 6]) -> SyscallResult {
             options(nostack)
         );
     }
-    SyscallResult(result as i64)
+    SyscallResult(result.cast_signed())
 }
 
 #[cfg(not(target_os = "none"))]
@@ -58,6 +58,24 @@ pub fn abi_version() -> Result<u32, Error> {
     // SAFETY: SystemInfo with selector zero has no pointer arguments.
     let result = unsafe { syscall(Syscall::SystemInfo, [0, 0, 0, 0, 0, 0]) }.into_result()?;
     u32::try_from(result).map_err(|_| Error::Io)
+}
+
+pub fn uptime_milliseconds() -> Result<u64, Error> {
+    // SAFETY: ClockGet has no pointer arguments.
+    unsafe { syscall(Syscall::ClockGet, [0; 6]) }.into_result()
+}
+
+pub fn processor_count() -> Result<u64, Error> {
+    system_info(SystemInfoSelector::ProcessorCount)
+}
+
+pub fn online_processor_count() -> Result<u64, Error> {
+    system_info(SystemInfoSelector::OnlineProcessorCount)
+}
+
+fn system_info(selector: SystemInfoSelector) -> Result<u64, Error> {
+    // SAFETY: SystemInfo consumes only a scalar selector.
+    unsafe { syscall(Syscall::SystemInfo, [selector as u64, 0, 0, 0, 0, 0]) }.into_result()
 }
 
 pub fn open(path: &[u8], flags: u32) -> Result<u32, Error> {
@@ -161,6 +179,20 @@ pub fn read_dir(handle: u32, output: &mut DirectoryEntry) -> Result<bool, Error>
     Ok(result != 0)
 }
 
+pub fn reboot() -> Result<(), Error> {
+    power_action(0)
+}
+
+pub fn shutdown() -> Result<(), Error> {
+    power_action(1)
+}
+
+fn power_action(action: u64) -> Result<(), Error> {
+    // SAFETY: Reboot consumes only a scalar action selector.
+    unsafe { syscall(Syscall::Reboot, [action, 0, 0, 0, 0, 0]) }.into_result()?;
+    Ok(())
+}
+
 pub fn exit(status: i32) -> ! {
     // SAFETY: Exit consumes only the scalar status argument.
     let encoded_status = u64::from_ne_bytes(i64::from(status).to_ne_bytes());
@@ -220,5 +252,9 @@ mod tests {
         assert_eq!(read(0, &mut buffer), Err(Error::NotSupported));
         assert_eq!(write(1, b"hello"), Err(Error::NotSupported));
         assert_eq!(stat(b"/", &mut metadata), Err(Error::NotSupported));
+        assert_eq!(reboot(), Err(Error::NotSupported));
+        assert_eq!(shutdown(), Err(Error::NotSupported));
+        assert_eq!(uptime_milliseconds(), Err(Error::NotSupported));
+        assert_eq!(processor_count(), Err(Error::NotSupported));
     }
 }

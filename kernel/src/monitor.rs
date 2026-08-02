@@ -12,7 +12,7 @@ use crate::interrupts::ControllerInfo;
 use crate::memory::FrameAllocator;
 use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
-use crate::ps2::{self, Keyboard, Mouse};
+use crate::ps2::{Keyboard, Mouse};
 use crate::rootfs::RootFileSystem;
 use crate::runtime;
 use crate::serial::SerialPort;
@@ -230,6 +230,8 @@ impl<'a> Monitor<'a> {
             usb: core::ptr::from_mut(self.usb),
             storage: core::ptr::from_mut(self.storage),
             root: core::ptr::from_mut(root),
+            power: self.platform.and_then(|platform| platform.power),
+            hhdm_offset: self.paging.hhdm_offset(),
         };
         self.write_line(
             INFO,
@@ -247,6 +249,7 @@ impl<'a> Monitor<'a> {
             close: session_close,
             stat: session_stat,
             read_dir: session_read_dir,
+            power: session_power,
         };
         let status = syscall::run_user_program(loaded.entry, loaded.stack_pointer, services);
         let status = i32::try_from(status).unwrap_or(-1);
@@ -267,7 +270,7 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "Commands: help clear uname meminfo heapinfo heapstats heaptest cpuinfo"
+                        "Commands: help clear uname meminfo heapinfo heapstats heaptest cpuinfo smpinfo"
                     ),
                 );
                 self.write_line(
@@ -288,7 +291,10 @@ impl<'a> Monitor<'a> {
                         "          nex-install usertest vfspath commands shellparse shelltest"
                     ),
                 );
-                self.write_line(FOREGROUND, format_args!("          int3 reboot halt echo"));
+                self.write_line(
+                    FOREGROUND,
+                    format_args!("          int3 shutdown reboot halt echo"),
+                );
             }
             b"clear" => {
                 self.console.clear();
@@ -299,7 +305,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.13.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.14.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -322,6 +328,7 @@ impl<'a> Monitor<'a> {
                     yes_no(self.cpu.has_sse2)
                 ),
             ),
+            b"smpinfo" => self.print_smp(),
             b"bootinfo" => {
                 let region_count = self.memory_region_count;
                 let rsdp_address = self.rsdp_address.unwrap_or(0);
@@ -386,9 +393,10 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "uptime: {}.{:03} seconds ({} PIT ticks)",
+                        "uptime: {}.{:03} seconds (source={}, {} PIT IRQ ticks)",
                         milliseconds / 1000,
                         milliseconds % 1000,
+                        interrupts::clock_source_name(),
                         interrupts::ticks()
                     ),
                 );
@@ -469,8 +477,23 @@ impl<'a> Monitor<'a> {
                 );
             }
             b"reboot" => {
-                self.write_line(WARNING, format_args!("Rebooting through i8042..."));
-                ps2::reboot();
+                self.write_line(
+                    WARNING,
+                    format_args!("Rebooting through ACPI reset with i8042 fallback..."),
+                );
+                crate::power::reboot(
+                    self.platform.and_then(|platform| platform.power),
+                    self.paging.hhdm_offset(),
+                );
+            }
+            b"shutdown" => {
+                self.write_line(WARNING, format_args!("Powering off through ACPI S5..."));
+                if let Err(error) = crate::power::power_off(
+                    self.platform.and_then(|platform| platform.power),
+                    self.paging.hhdm_offset(),
+                ) {
+                    self.write_line(WARNING, format_args!("ACPI shutdown failed: {error:?}"));
+                }
             }
             b"halt" => {
                 self.write_line(
@@ -746,6 +769,56 @@ impl<'a> Monitor<'a> {
                 ),
             );
         }
+        if let Some(power) = platform.power {
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "FADT: PM1a space={} address={:#x}, S5={} types={}/{}, reset space={} address={:#x}",
+                    power.pm1a_control.address_space,
+                    power.pm1a_control.address,
+                    yes_no(power.sleep_supported),
+                    power.sleep_type_a,
+                    power.sleep_type_b,
+                    power.reset_register.address_space,
+                    power.reset_register.address
+                ),
+            );
+        }
+    }
+
+    fn print_smp(&mut self) {
+        let summary = crate::smp::summary();
+        self.write_line(
+            FOREGROUND,
+            format_args!(
+                "SMP: requested={}, registered={}, online={}, BSP LAPIC={}{}",
+                summary.requested,
+                summary.registered,
+                summary.online,
+                summary.bsp_lapic_id,
+                if summary.truncated {
+                    " (truncated)"
+                } else {
+                    ""
+                }
+            ),
+        );
+        for index in 0..summary.registered {
+            let Some(cpu) = crate::smp::cpu_snapshot(index) else {
+                continue;
+            };
+            self.write_line(
+                FOREGROUND,
+                format_args!(
+                    "cpu{index}: processor={}, LAPIC={}, state={:?}, scheduler_ticks={}, idle_halts={}",
+                    cpu.processor_id,
+                    cpu.lapic_id,
+                    cpu.state,
+                    cpu.scheduler_ticks,
+                    cpu.idle_halts
+                ),
+            );
+        }
     }
 
     fn print_pci(&mut self) {
@@ -753,7 +826,8 @@ impl<'a> Monitor<'a> {
         self.write_line(
             FOREGROUND,
             format_args!(
-                "PCI functions: {count}{}",
+                "PCI functions: {count}, access={}{}",
+                self.pci.access().name(),
                 if self.pci.truncated() {
                     " (inventory truncated)"
                 } else {
@@ -1511,6 +1585,8 @@ struct UserSessionContext {
     usb: *mut UsbManager,
     storage: *mut StorageManager,
     root: *mut RootFileSystem,
+    power: Option<crate::acpi::PowerInfo>,
+    hhdm_offset: u64,
 }
 
 unsafe fn session_read(
@@ -1605,6 +1681,17 @@ unsafe fn session_read_dir(
     let root = unsafe { &mut *session.root };
     let storage = unsafe { &mut *session.storage };
     root.read_dir(storage, descriptor)
+}
+
+unsafe fn session_power(context: *mut (), action: u32) -> Result<(), nexos_abi::Error> {
+    // SAFETY: The session context remains live for the synchronous syscall.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    match action {
+        0 => crate::power::reboot(session.power, session.hhdm_offset),
+        1 => crate::power::power_off(session.power, session.hhdm_offset)
+            .map_err(|_| nexos_abi::Error::NotSupported),
+        _ => Err(nexos_abi::Error::InvalidArgument),
+    }
 }
 
 struct Ascii<'a>(&'a [u8]);

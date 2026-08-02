@@ -163,6 +163,8 @@ pub enum SystemInfoSelector {
     PageSize = 1,
     ClockFrequency = 2,
     ProcessId = 3,
+    ProcessorCount = 4,
+    OnlineProcessorCount = 5,
 }
 
 #[repr(C)]
@@ -227,6 +229,7 @@ mod tests {
         assert_eq!(Error::NoSpace.as_syscall_result(), -28);
         assert_eq!(core::mem::size_of::<DirectoryEntry>(), 80);
         assert_eq!(core::mem::size_of::<FileStat>(), 32);
+        assert_eq!(SystemInfoSelector::OnlineProcessorCount as u64, 5);
     }
 
     #[test]

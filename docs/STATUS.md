@@ -15,12 +15,19 @@ Last verified: 2026-08-02
 - GDT, 64-bit TSS, IDT exception handlers, and a dedicated double-fault stack.
 - ACPI 1.0 RSDT and ACPI 2.0+ XSDT parsing with checksum validation.
 - MADT processor, local-APIC, I/O-APIC, and interrupt-override discovery.
-- HPET and PCI MCFG table discovery.
+- HPET main-counter timekeeping with period validation and PIT fallback.
+- PCI MCFG ECAM enumeration for segment zero with mechanism 1 fallback.
+- FADT reset/PM1 register discovery, AML `_S5_` parsing, and working ACPI
+  shutdown/reset paths from the monitor and ring-3 shell.
+- Limine-assisted application-processor startup for up to 64 CPUs, shared
+  kernel GDT/IDT loading, per-CPU local-APIC enablement, and bounded online,
+  scheduler-tick, and idle-halt accounting.
 - Local APIC and I/O APIC routing for PIT, PS/2 keyboard, and PS/2 mouse IRQs.
 - Automatic legacy PIC fallback when APIC initialization is unavailable.
-- 100 Hz PIT monotonic ticks and uptime reporting.
+- 100 Hz PIT scheduler ticks and HPET/PIT-selected uptime reporting.
 - Interrupt-driven i8042 keyboard and three-byte PS/2 mouse packets.
-- PCI configuration mechanism 1 enumeration across all buses and functions.
+- PCI ECAM or configuration mechanism 1 enumeration across advertised buses
+  and functions.
 - SATA AHCI discovery with DMA IDENTIFY, LBA28/LBA48 reads and writes, cache
   flush, bounded polling, BIOS handoff, and task-file error reporting.
 - Legacy PCI IDE primary/secondary and master/slave discovery with PIO
@@ -76,7 +83,8 @@ Last verified: 2026-08-02
   directory-entry syscalls. Blocking input temporarily enables IRQ delivery
   around `HLT` and restores the masked syscall invariant afterward.
 - The default installed-system prompt is `nexsh>` with working `help`,
-  `uname`, `pwd`, `echo`, `ls`, `cat`, `stat`, `clear`, and `exit` commands.
+  `uname`, `smpinfo`, `uptime`, `pwd`, `echo`, `ls`, `cat`, `stat`, `clear`,
+  `shutdown`, `reboot`, and `exit` commands.
 - PCI xHCI discovery, firmware ownership handoff, controller halt/reset/start,
   4 KiB DMA command and event rings, ERST/DCBAA setup, scratchpad allocation,
   and bounded polling.
@@ -215,11 +223,17 @@ must mount disk0p3 as `/`, validate and load `/bin/nexsh`, reach `nexsh>`, run
 `uname`, read `/etc/nexos-release`, and enumerate the NexFS root directory.
 The existing xHCI gate also installs the expanded root through BOT/SCSI.
 
+The milestone-14 platform gate boots four virtual CPUs under both SeaBIOS and
+UEFI, requires all APs online, exercises `smpinfo`, confirms HPET uptime and
+MCFG ECAM enumeration, inspects FADT power registers, and requires ACPI S5 to
+terminate QEMU. Installed-disk boots repeat four-CPU startup and invoke S5 from
+the ring-3 shell syscall.
+
 ## Not implemented yet
 
 Page-table frame reclamation, separate per-process page tables, asynchronous
 process scheduling, `Spawn`/`Wait`, multiprocess pipelines and redirection,
-HPET clock use, PCI ECAM access, power-off through the FADT, SMP, USB hotplug
+cross-CPU task migration, per-CPU TSS/user syscall stacks, USB hotplug
 re-enumeration, multiple USB LUNs, UAS, EHCI/OHCI/UHCI, NVMe, general FAT32
 long-file-name creation, and NexFS journaling remain later work.
 

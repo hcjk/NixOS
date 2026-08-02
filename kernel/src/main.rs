@@ -12,6 +12,7 @@ mod cpu;
 mod framebuffer;
 mod gdt;
 mod heap;
+mod hpet;
 mod ide;
 mod installer;
 mod interrupts;
@@ -19,10 +20,12 @@ mod memory;
 mod monitor;
 mod paging;
 mod pci;
+mod power;
 mod ps2;
 mod rootfs;
 mod runtime;
 mod serial;
+mod smp;
 mod storage;
 mod syscall;
 mod usb;
@@ -34,7 +37,7 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use limine::request::{
     ExecutableFileRequest, FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest,
-    RsdpRequest,
+    MpRequest, RsdpRequest,
 };
 use limine::{BaseRevision, RequestsEndMarker, RequestsStartMarker};
 
@@ -71,6 +74,10 @@ static EXECUTABLE_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::n
 static MODULES_REQUEST: ModulesRequest = ModulesRequest::new();
 
 #[used]
+#[unsafe(link_section = ".requests")]
+static MP_REQUEST: MpRequest = MpRequest::new(0);
+
+#[used]
 #[unsafe(link_section = ".requests_end_marker")]
 static REQUESTS_END: RequestsEndMarker = RequestsEndMarker::new();
 
@@ -102,7 +109,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.13.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.14.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -177,14 +184,15 @@ extern "C" fn kernel_main() -> ! {
             Ok(info) => {
                 let _ = writeln!(
                     serial,
-                    "ACPI: rev {}, {} tables, root={}, CPUs={}, IOAPIC={}, HPET={}, MCFG={}",
+                    "ACPI: rev {}, {} tables, root={}, CPUs={}, IOAPIC={}, HPET={}, MCFG={}, FADT power={}",
                     info.revision,
                     info.table_count,
                     if info.uses_xsdt { "XSDT" } else { "RSDT" },
                     info.enabled_processor_count,
                     info.io_apic.is_some(),
                     info.hpet.is_some(),
-                    info.mcfg.is_some()
+                    info.mcfg.is_some(),
+                    info.power.is_some()
                 );
                 Some(info)
             }
@@ -196,11 +204,37 @@ extern "C" fn kernel_main() -> ! {
     } else {
         None
     };
-    let pci = pci::PciInventory::scan();
+    let hpet_clock = match hpet::initialize(
+        platform.as_ref().and_then(|info| info.hpet),
+        &mut paging,
+        &mut allocator,
+    ) {
+        Ok(clock) => {
+            let _ = writeln!(
+                serial,
+                "HPET: active, revision={}, timers={}, counter={}bit, period={} fs, minimum tick={}",
+                clock.revision,
+                clock.timer_count,
+                if clock.counter_64_bit { 64 } else { 32 },
+                clock.period_femtoseconds,
+                clock.minimum_tick
+            );
+            Some(clock)
+        }
+        Err(error) => {
+            let _ = writeln!(
+                serial,
+                "HPET: unavailable ({error}); PIT clock fallback active"
+            );
+            None
+        }
+    };
+    let pci = pci::PciInventory::scan(platform.as_ref(), &mut paging, &mut allocator);
     let _ = writeln!(
         serial,
-        "PCI: {} functions discovered{}",
+        "PCI: {} functions discovered via {}{}",
         pci.count(),
+        pci.access().name(),
         if pci.truncated() { " (truncated)" } else { "" }
     );
 
@@ -224,7 +258,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.13.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.14.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -261,6 +295,7 @@ extern "C" fn kernel_main() -> ! {
         kernel_main as *const () as u64,
         heap_stats.virtual_start + heap_stats.size as u64,
     );
+    let smp = smp::initialize(MP_REQUEST.response());
     let _ = writeln!(
         serial,
         "interrupts: GDT/TSS/IDT online, {}, PIT 100 Hz, PS/2 keyboard=true, mouse={}, syscall={}, runtime={}",
@@ -268,6 +303,15 @@ extern "C" fn kernel_main() -> ! {
         interrupt_controller.mouse_enabled,
         syscall_ready,
         runtime_ready
+    );
+    let _ = writeln!(
+        serial,
+        "SMP: requested={}, registered={}, online={}, BSP LAPIC={}{}",
+        smp.requested,
+        smp.registered,
+        smp.online,
+        smp.bsp_lapic_id,
+        if smp.truncated { " (truncated)" } else { "" }
     );
     if let Some(apic) = interrupt_controller.apic {
         let _ = writeln!(
@@ -351,7 +395,15 @@ extern "C" fn kernel_main() -> ! {
             "rootfs: no mountable NexFS root; recovery monitor selected"
         );
     }
-    let _ = writeln!(serial, "milestone 13 filesystem-backed userspace ready");
+    let _ = writeln!(
+        serial,
+        "milestone 14 platform services ready: CPUs={}/{}, clock={}, PCI={}, ACPI power={}",
+        smp.online,
+        smp.registered,
+        if hpet_clock.is_some() { "HPET" } else { "PIT" },
+        pci.access().name(),
+        platform.as_ref().is_some_and(|info| info.power.is_some())
+    );
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,

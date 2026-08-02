@@ -273,7 +273,7 @@ pub fn install(
         write_nexfs_file(
             &mut filesystem,
             "/etc/nexos-release",
-            b"NAME=NexOS\nVERSION=0.13.0-dev\nARCH=x86_64\n",
+            b"NAME=NexOS\nVERSION=0.14.0-dev\nARCH=x86_64\n",
         )?;
         write_nexfs_file(
             &mut filesystem,
@@ -281,7 +281,7 @@ pub fn install(
             b"root / nexfs rw 0 1\nesp /boot fat32 rw 0 2\n",
         )?;
         let manifest = format!(
-            "format=2\nversion=0.13.0-dev\nkernel_bytes={}\nkernel_crc32={:08x}\nshell_bytes={}\nshell_crc32={:08x}\n",
+            "format=2\nversion=0.14.0-dev\nkernel_bytes={}\nkernel_crc32={:08x}\nshell_bytes={}\nshell_crc32={:08x}\n",
             payload.kernel.len(),
             crc32(payload.kernel),
             shell.len(),

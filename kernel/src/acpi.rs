@@ -41,6 +41,41 @@ pub struct McfgInfo {
     pub end_bus: u8,
 }
 
+#[derive(Clone, Copy)]
+pub struct GenericAddress {
+    pub address_space: u8,
+    pub bit_width: u8,
+    pub bit_offset: u8,
+    pub access_size: u8,
+    pub address: u64,
+}
+
+impl GenericAddress {
+    const EMPTY: Self = Self {
+        address_space: 0,
+        bit_width: 0,
+        bit_offset: 0,
+        access_size: 0,
+        address: 0,
+    };
+
+    #[must_use]
+    pub const fn is_present(self) -> bool {
+        self.address != 0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct PowerInfo {
+    pub reset_register: GenericAddress,
+    pub reset_value: u8,
+    pub pm1a_control: GenericAddress,
+    pub pm1b_control: GenericAddress,
+    pub sleep_type_a: u16,
+    pub sleep_type_b: u16,
+    pub sleep_supported: bool,
+}
+
 pub struct PlatformInfo {
     pub revision: u8,
     pub uses_xsdt: bool,
@@ -50,6 +85,7 @@ pub struct PlatformInfo {
     pub io_apic: Option<IoApicInfo>,
     pub hpet: Option<HpetInfo>,
     pub mcfg: Option<McfgInfo>,
+    pub power: Option<PowerInfo>,
     interrupt_overrides: [InterruptOverride; MAX_INTERRUPT_OVERRIDES],
     interrupt_override_count: usize,
 }
@@ -103,6 +139,7 @@ impl PlatformInfo {
             io_apic: None,
             hpet: None,
             mcfg: None,
+            power: None,
             interrupt_overrides: [InterruptOverride::EMPTY; MAX_INTERRUPT_OVERRIDES],
             interrupt_override_count: 0,
         };
@@ -123,6 +160,7 @@ impl PlatformInfo {
                 b"APIC" => platform.parse_madt(table)?,
                 b"HPET" => platform.parse_hpet(table)?,
                 b"MCFG" => platform.parse_mcfg(table)?,
+                b"FACP" => platform.parse_fadt(table, hhdm_offset)?,
                 _ => {}
             }
         }
@@ -214,6 +252,86 @@ impl PlatformInfo {
             start_bus: read_u8(table + 54),
             end_bus: read_u8(table + 55),
         });
+        Ok(())
+    }
+
+    #[allow(clippy::similar_names)]
+    fn parse_fadt(&mut self, table: u64, hhdm_offset: u64) -> Result<(), AcpiError> {
+        let length = table_length(table)?;
+        if length < 116 {
+            return Err(AcpiError::InvalidLength);
+        }
+        let pm1_control_length = read_u8(table + 89);
+        let legacy_pm1a = generic_io_address(read_u32(table + 64), pm1_control_length);
+        let legacy_pm1b = generic_io_address(read_u32(table + 68), pm1_control_length);
+        let pm1a_control = if length >= 184 {
+            let extended = read_generic_address(table + 172);
+            if extended.is_present() {
+                extended
+            } else {
+                legacy_pm1a
+            }
+        } else {
+            legacy_pm1a
+        };
+        let pm1b_control = if length >= 196 {
+            let extended = read_generic_address(table + 184);
+            if extended.is_present() {
+                extended
+            } else {
+                legacy_pm1b
+            }
+        } else {
+            legacy_pm1b
+        };
+        let flags = read_u32(table + 112);
+        let (reset_register, reset_value) = if length >= 129 && flags & (1 << 10) != 0 {
+            (read_generic_address(table + 116), read_u8(table + 128))
+        } else {
+            (GenericAddress::EMPTY, 0)
+        };
+        let legacy_dsdt = u64::from(read_u32(table + 40));
+        let extended_dsdt = if length >= 148 {
+            read_u64(table + 140)
+        } else {
+            0
+        };
+        let dsdt_physical = if extended_dsdt != 0 {
+            extended_dsdt
+        } else {
+            legacy_dsdt
+        };
+        let sleep = if dsdt_physical != 0 && pm1a_control.is_present() {
+            physical_to_virtual(hhdm_offset, dsdt_physical)
+                .ok()
+                .and_then(|dsdt| {
+                    validate_sdt(dsdt, *b"DSDT").ok()?;
+                    let dsdt_length = table_length(dsdt).ok()?;
+                    let aml_length = dsdt_length.checked_sub(SDT_HEADER_SIZE)?;
+                    // SAFETY: The checksum-validated DSDT occupies
+                    // `dsdt_length` mapped bytes and AML follows its header.
+                    let aml = unsafe {
+                        core::slice::from_raw_parts(
+                            (dsdt + SDT_HEADER_SIZE as u64) as *const u8,
+                            aml_length,
+                        )
+                    };
+                    nexos_runtime::platform::parse_s5_sleep_types(aml)
+                })
+        } else {
+            None
+        };
+        if reset_register.is_present() || sleep.is_some() {
+            self.power = Some(PowerInfo {
+                reset_register,
+                reset_value,
+                pm1a_control,
+                pm1b_control,
+                sleep_type_a: sleep.map_or(0, |types| types.primary),
+                sleep_type_b: sleep.map_or(0, |types| types.secondary),
+                sleep_supported: sleep.is_some(),
+            });
+        }
         Ok(())
     }
 }
@@ -321,4 +439,33 @@ fn read_u64(address: u64) -> u64 {
         read_u8(address + 6),
         read_u8(address + 7),
     ])
+}
+
+fn read_generic_address(address: u64) -> GenericAddress {
+    GenericAddress {
+        address_space: read_u8(address),
+        bit_width: read_u8(address + 1),
+        bit_offset: read_u8(address + 2),
+        access_size: read_u8(address + 3),
+        address: read_u64(address + 4),
+    }
+}
+
+fn generic_io_address(address: u32, byte_width: u8) -> GenericAddress {
+    if address == 0 {
+        return GenericAddress::EMPTY;
+    }
+    GenericAddress {
+        address_space: 1,
+        bit_width: byte_width.saturating_mul(8),
+        bit_offset: 0,
+        access_size: match byte_width {
+            1 => 1,
+            2 => 2,
+            4 => 3,
+            8 => 4,
+            _ => 0,
+        },
+        address: u64::from(address),
+    }
 }

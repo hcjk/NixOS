@@ -36,6 +36,7 @@ pub type OpenService = unsafe fn(*mut (), &[u8], u32) -> Result<u32, Error>;
 pub type CloseService = unsafe fn(*mut (), u32) -> Result<(), Error>;
 pub type StatService = unsafe fn(*mut (), &[u8]) -> Result<FileStat, Error>;
 pub type ReadDirService = unsafe fn(*mut (), u32) -> Result<Option<DirectoryEntry>, Error>;
+pub type PowerService = unsafe fn(*mut (), u32) -> Result<(), Error>;
 
 #[derive(Clone, Copy)]
 pub struct UserServiceTable {
@@ -47,12 +48,13 @@ pub struct UserServiceTable {
     pub close: CloseService,
     pub stat: StatService,
     pub read_dir: ReadDirService,
+    pub power: PowerService,
 }
 
 struct ServiceCell(UnsafeCell<Option<UserServiceTable>>);
 
-// SAFETY: NexOS currently enables one processor. A service table is installed
-// immediately before the synchronous ring-3 transition and removed after it.
+// SAFETY: The service table is installed and consumed only by the BSP's
+// synchronous ring-3 transition. Application processors remain in idle loops.
 unsafe impl Sync for ServiceCell {}
 
 static USER_SERVICES: ServiceCell = ServiceCell(UnsafeCell::new(None));
@@ -383,10 +385,25 @@ extern "C" fn nexos_syscall_dispatch(frame: &SyscallFrame) -> i64 {
         Syscall::SystemInfo => match frame.argument_0 {
             value if value == SystemInfoSelector::AbiVersion as u64 => i64::from(ABI_VERSION),
             value if value == SystemInfoSelector::PageSize as u64 => PAGE_SIZE as i64,
+            value if value == SystemInfoSelector::ClockFrequency as u64 => {
+                crate::interrupts::clock_frequency_hz() as i64
+            }
             value if value == SystemInfoSelector::ProcessId as u64 => 2,
+            value if value == SystemInfoSelector::ProcessorCount as u64 => {
+                crate::smp::summary().registered as i64
+            }
+            value if value == SystemInfoSelector::OnlineProcessorCount as u64 => {
+                crate::smp::summary().online as i64
+            }
             _ => Error::InvalidArgument.as_syscall_result(),
         },
         Syscall::ClockGet => crate::interrupts::uptime_milliseconds() as i64,
+        Syscall::Reboot => with_services(|services| {
+            // SAFETY: Power control consumes only a scalar action and the
+            // synchronous service context remains live until reset/power-off.
+            unsafe { (services.power)(services.context, frame.argument_0 as u32) }?;
+            Ok(0)
+        }),
         _ => Error::NotSupported.as_syscall_result(),
     }
 }

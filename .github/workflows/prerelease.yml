@@ -214,6 +214,27 @@ jobs:
             --iso "build/NexOS-v${VERSION}-x86_64.iso" \
             --uefi-firmware "$firmware"
 
+      - name: Verify SMP, HPET, PCI ECAM, and ACPI power control
+        shell: bash
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          firmware=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" == */OVMF_CODE*.fd && -f "$candidate" ]]; then
+              firmware="$candidate"
+              break
+            fi
+          done < <(dpkg-query -L ovmf)
+          if [[ -z "$firmware" || ! -f "$firmware" ]]; then
+            echo "An OVMF_CODE firmware image was not found after installing ovmf" >&2
+            exit 1
+          fi
+          python3 scripts/qemu-platform-smoke.py \
+            --iso "build/NexOS-v${VERSION}-x86_64.iso" \
+            --uefi-firmware "$firmware"
+
       - name: Verify live xHCI hub, HID, storage, and disconnect I/O
         shell: bash
         env:

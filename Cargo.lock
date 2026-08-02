@@ -185,18 +185,18 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "nexfs"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "nexos-storage",
 ]
 
 [[package]]
 name = "nexos-abi"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 
 [[package]]
 name = "nexos-installer"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "fatfs",
  "nexfs",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "nexos-kernel"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "limine",
  "nexfs",
@@ -220,14 +220,14 @@ dependencies = [
 
 [[package]]
 name = "nexos-runtime"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "nexos-abi",
 ]
 
 [[package]]
 name = "nexos-shell"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "nexos-abi",
  "nexos-userspace",
@@ -235,25 +235,25 @@ dependencies = [
 
 [[package]]
 name = "nexos-storage"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "fatfs",
 ]
 
 [[package]]
 name = "nexos-usb"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 
 [[package]]
 name = "nexos-userspace"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "nexos-abi",
 ]
 
 [[package]]
 name = "nexosctl"
-version = "0.13.0-dev"
+version = "0.14.0-dev"
 dependencies = [
  "fatfs",
  "nexfs",

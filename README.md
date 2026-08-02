@@ -4,8 +4,7 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the Milestone 11 hardware-installer
-preview:
+The repository currently implements the Milestone 14 platform preview:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -17,13 +16,16 @@ preview:
 - a physical page-frame allocator built from the Limine memory map;
 - a 16 MiB global kernel allocator backed by contiguous physical frames;
 - GDT/TSS and IDT exception handling with a dedicated double-fault stack;
-- legacy PIC interrupt routing, a 100 Hz PIT clock, and timer ticks;
+- legacy PIC interrupt routing, a 100 Hz PIT scheduler tick, and HPET-backed
+  monotonic time when ACPI exposes it;
 - live four-level page-table inspection through Limine's higher-half map;
 - a readable 24/32-bit framebuffer terminal with scrolling and colors;
 - x86-64 feature detection and COM1 diagnostic logging;
 - an interrupt-driven PS/2 keyboard with an interactive kernel monitor;
-- ACPI platform discovery, APIC/I/O APIC interrupt routing, PCI enumeration,
-  and PS/2 mouse packets;
+- ACPI platform discovery, APIC/I/O APIC interrupt routing, MCFG ECAM PCI
+  enumeration, FADT reset/S5 power control, and PS/2 mouse packets;
+- Limine-assisted startup of up to 64 x86-64 processors, shared GDT/IDT and
+  local-APIC setup, plus observable per-CPU online/scheduler/idle state;
 - polling SATA AHCI DMA and legacy IDE PIO block drivers;
 - bounded partition devices, MBR/GPT validation, and a write-back block cache;
 - a native `no_std` FAT32 reader/writer supporting nested 8.3 directories and
@@ -48,8 +50,8 @@ preview:
   confirmed `nex-install` path for 512-byte-sector AHCI/IDE disks on UEFI
   x86-64 hardware.
 
-Multiprocess pipelines, SMP, and broader storage-controller support remain
-tracked work. See
+Task migration to application processors, multiprocess pipelines, and broader
+storage-controller support remain tracked work. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -73,6 +75,8 @@ raw-device paths. The installer embedded in the release ISO can write a
 physical AHCI or IDE disk after an exact `ERASE-diskN` confirmation.
 The full NexFS v1 layout and metadata ordering rules are documented in
 [docs/NEXFS.md](docs/NEXFS.md).
+SMP, HPET, ECAM, and ACPI power behavior are documented in
+[docs/PLATFORM.md](docs/PLATFORM.md).
 
 ## Disk utility and installer
 
@@ -88,7 +92,7 @@ cargo run -p nexos-installer --bin diskutil -- check build\disk.img 3
 Install and verify NexOS on an image:
 
 ```powershell
-cargo run -p nexos-installer --bin nex-install -- --target build\installed.img --kernel target\x86_64-nexos\debug\nexos-kernel --limine vendor\limine\limine-binary --mode combined --yes --confirm build\installed.img
+cargo run -p nexos-installer --bin nex-install -- --target build\installed.img --kernel target\x86_64-nexos\debug\nexos-kernel --shell target\x86_64-nexos-user\release\nexsh --limine vendor\limine\limine-binary --mode combined --yes --confirm build\installed.img
 cargo run -p nexos-installer --bin nex-install -- verify build\installed.img
 ```
 
@@ -115,6 +119,7 @@ BIOS stages and the standard UEFI fallback path. Secure Boot must be disabled.
 ## Kernel build
 
 ```powershell
+.\scripts\build-userspace.ps1
 .\scripts\build-kernel.ps1
 ```
 
@@ -162,10 +167,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-qemu.ps1
 ```
 
 At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
-`cpuinfo`, `bootinfo`, `acpi`, `lspci`, `lsusb`, `usbinfo`, `usbtest`, `lsblk`,
+`cpuinfo`, `smpinfo`, `bootinfo`, `acpi`, `lspci`, `lsusb`, `usbinfo`, `usbtest`, `lsblk`,
 `disktest 0`, `uptime`,
 `virtinfo`, `ps`, `schedinfo`, `syscalls`, `usertest`, `commands`, `shelltest`,
-`vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `reboot`, or `halt`.
+`vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `shutdown`, `reboot`, or `halt`.
 `usertest` executes a small ring-3 program that queries ABI v1 with `SYSCALL`
 and exits back to the monitor. `disktest` is read-only: it reads LBA 0, reports
 its CRC32, and never writes the disk. Installed systems mount their NexFS root,
@@ -174,8 +179,10 @@ default prompt. ISO/recovery boots without a root retain the `nexos>` monitor.
 The monitor accepts input from PS/2/i8042, USB boot-protocol keyboards, and
 COM1. USB mice generate events, and BOT/SCSI disks appear as `/dev/usbN`.
 
-Release builds run `scripts/qemu-installer-smoke.py` and
-`scripts/qemu-usb-smoke.py`. Publication requires a fresh in-OS install that
+Release builds run `scripts/qemu-installer-smoke.py`,
+`scripts/qemu-platform-smoke.py`, and `scripts/qemu-usb-smoke.py`.
+Publication requires four-CPU BIOS/UEFI boots with HPET, ECAM, and ACPI S5,
+plus a fresh in-OS install that
 boots without its ISO under SeaBIOS and UEFI, launches `/bin/nexsh`, and reads
 files from NexFS in ring 3, plus live USB-only keyboard and mouse input,
 one-level hub enumeration, USB-disk installation, and disconnect handling.

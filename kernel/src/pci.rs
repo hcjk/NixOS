@@ -1,6 +1,27 @@
 use core::arch::asm;
 
+use crate::acpi::{McfgInfo, PlatformInfo};
+use crate::memory::FrameAllocator;
+use crate::paging::{PageMapError, PagingInfo};
+
 const MAX_PCI_DEVICES: usize = 128;
+const ECAM_SCRATCH_VIRTUAL: u64 = 0xffff_ff80_0000_3000;
+
+#[derive(Clone, Copy)]
+pub enum PciAccess {
+    Ecam,
+    Mechanism1,
+}
+
+impl PciAccess {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ecam => "ACPI ECAM",
+            Self::Mechanism1 => "mechanism 1",
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct PciBar {
@@ -113,16 +134,37 @@ pub struct PciInventory {
     devices: [PciDevice; MAX_PCI_DEVICES],
     count: usize,
     truncated: bool,
+    access: PciAccess,
 }
 
 impl PciInventory {
     #[must_use]
-    pub fn scan() -> Self {
+    pub fn scan(
+        platform: Option<&PlatformInfo>,
+        paging: &mut PagingInfo,
+        allocator: &mut FrameAllocator,
+    ) -> Self {
         let mut inventory = Self {
             devices: [PciDevice::EMPTY; MAX_PCI_DEVICES],
             count: 0,
             truncated: false,
+            access: PciAccess::Mechanism1,
         };
+        if let Some(mcfg) = platform.and_then(|info| info.mcfg)
+            && mcfg.segment_group == 0
+            && mcfg.start_bus <= mcfg.end_bus
+            && inventory.scan_ecam(mcfg, paging, allocator).is_ok()
+        {
+            inventory.access = PciAccess::Ecam;
+            return inventory;
+        }
+        inventory.count = 0;
+        inventory.truncated = false;
+        inventory.scan_mechanism1();
+        inventory
+    }
+
+    fn scan_mechanism1(&mut self) {
         for bus_value in 0_u16..=255 {
             let bus = u8::try_from(bus_value).unwrap_or(0);
             for device in 0_u8..32 {
@@ -136,11 +178,40 @@ impl PciInventory {
                     if read_config_u16(bus, device, function, 0) == 0xffff {
                         continue;
                     }
-                    inventory.push(read_device(bus, device, function));
+                    self.push(read_device(bus, device, function));
                 }
             }
         }
-        inventory
+    }
+
+    fn scan_ecam(
+        &mut self,
+        mcfg: McfgInfo,
+        paging: &mut PagingInfo,
+        allocator: &mut FrameAllocator,
+    ) -> Result<(), PageMapError> {
+        for bus_value in u16::from(mcfg.start_bus)..=u16::from(mcfg.end_bus) {
+            let bus = u8::try_from(bus_value).unwrap_or(mcfg.end_bus);
+            for device in 0_u8..32 {
+                let Some((function_zero, header_type)) =
+                    read_ecam_device(mcfg, bus, device, 0, paging, allocator)?
+                else {
+                    continue;
+                };
+                self.push(function_zero);
+                if header_type & 0x80 == 0 {
+                    continue;
+                }
+                for function in 1_u8..8 {
+                    if let Some((entry, _)) =
+                        read_ecam_device(mcfg, bus, device, function, paging, allocator)?
+                    {
+                        self.push(entry);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -158,6 +229,11 @@ impl PciInventory {
         self.truncated
     }
 
+    #[must_use]
+    pub const fn access(&self) -> PciAccess {
+        self.access
+    }
+
     fn push(&mut self, device: PciDevice) {
         if self.count == MAX_PCI_DEVICES {
             self.truncated = true;
@@ -166,6 +242,55 @@ impl PciInventory {
         self.devices[self.count] = device;
         self.count += 1;
     }
+}
+
+fn read_ecam_device(
+    mcfg: McfgInfo,
+    bus: u8,
+    device: u8,
+    function: u8,
+    paging: &mut PagingInfo,
+    allocator: &mut FrameAllocator,
+) -> Result<Option<(PciDevice, u8)>, PageMapError> {
+    let physical = nexos_runtime::platform::ecam_function_address(
+        mcfg.base_address,
+        mcfg.start_bus,
+        bus,
+        device,
+        function,
+    )
+    .ok_or(PageMapError::Unaligned)?;
+    paging.map_mmio_page(ECAM_SCRATCH_VIRTUAL, physical, allocator)?;
+    // SAFETY: The scratch page maps this function's 4 KiB ECAM configuration
+    // space uncached for the duration of these volatile reads.
+    let identity = unsafe { core::ptr::read_volatile(ECAM_SCRATCH_VIRTUAL as *const u32) };
+    let result = if identity & 0xffff == 0xffff {
+        None
+    } else {
+        // SAFETY: Offsets 0x08 and 0x0c are within the same mapped function.
+        let class_data =
+            unsafe { core::ptr::read_volatile((ECAM_SCRATCH_VIRTUAL + 0x08) as *const u32) };
+        let header =
+            unsafe { core::ptr::read_volatile((ECAM_SCRATCH_VIRTUAL + 0x0c) as *const u32) };
+        let identity_bytes = identity.to_le_bytes();
+        let class_bytes = class_data.to_le_bytes();
+        Some((
+            PciDevice {
+                bus,
+                device,
+                function,
+                vendor_id: u16::from_le_bytes([identity_bytes[0], identity_bytes[1]]),
+                device_id: u16::from_le_bytes([identity_bytes[2], identity_bytes[3]]),
+                class: class_bytes[3],
+                subclass: class_bytes[2],
+                programming_interface: class_bytes[1],
+                revision: class_bytes[0],
+            },
+            header.to_le_bytes()[2],
+        ))
+    };
+    paging.unmap_page(ECAM_SCRATCH_VIRTUAL)?;
+    Ok(result)
 }
 
 fn read_device(bus: u8, device: u8, function: u8) -> PciDevice {

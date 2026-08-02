@@ -93,6 +93,12 @@ pub fn end_of_interrupt() {
     local_write(LOCAL_APIC_EOI, 0);
 }
 
+pub fn initialize_application_processor() {
+    enable_local_apic();
+    let spurious = local_read(LOCAL_APIC_SPURIOUS);
+    local_write(LOCAL_APIC_SPURIOUS, (spurious & !0xff) | 0x1ff);
+}
+
 fn configure_irq(
     platform: &PlatformInfo,
     global_base: u32,

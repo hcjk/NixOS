@@ -20,8 +20,10 @@ of allocating memory in an interrupt path.
 The round-robin scheduler supports ready, running, sleeping, blocked, and
 exited task states. A five-tick quantum is driven by the 100 Hz timer. Sleep
 deadlines, FIFO wait queues, explicit wakeups, exit, and reap are part of the
-portable `no_std` runtime core. The boot processor remains the only enabled
-CPU; per-CPU run queues are a later SMP milestone.
+portable `no_std` runtime core. Milestone 14 starts application processors and
+publishes per-CPU online, scheduler-tick, and idle state. User tasks remain on
+the boot processor until each AP has a private TSS/syscall stack and the
+scheduler gains cross-CPU task migration.
 
 ## ELF64 loading
 
