@@ -51,6 +51,7 @@ impl InstallMode {
 pub struct InstallRequest {
     pub target: PathBuf,
     pub kernel: PathBuf,
+    pub shell: PathBuf,
     pub limine_directory: PathBuf,
     pub size_mib: usize,
     pub mode: InstallMode,
@@ -76,6 +77,8 @@ pub fn install(request: &InstallRequest) -> Result<InstallReport, String> {
     require_confirmation(&request.target, request.yes, &request.confirmation)?;
     let kernel = fs::read(&request.kernel)
         .map_err(|error| format!("cannot read kernel {}: {error}", request.kernel.display()))?;
+    let shell = fs::read(&request.shell)
+        .map_err(|error| format!("cannot read shell {}: {error}", request.shell.display()))?;
     let boot_x64 = read_required(&request.limine_directory.join("BOOTX64.EFI"))?;
     let bios_sys = read_required(&request.limine_directory.join("limine-bios.sys"))?;
 
@@ -111,12 +114,13 @@ pub fn install(request: &InstallRequest) -> Result<InstallReport, String> {
 
     let root_uuid = generate_guid().0;
     format_partition(&mut image, &esp, FilesystemKind::Fat32, generate_guid().0)?;
-    populate_esp(&mut image, &esp, &kernel, &boot_x64, &bios_sys)?;
+    populate_esp(&mut image, &esp, &kernel, &shell, &boot_x64, &bios_sys)?;
     format_partition(&mut image, &root, FilesystemKind::NexFs, root_uuid)?;
     populate_root(
         &mut image,
         &root,
         &kernel,
+        &shell,
         root_uuid,
         esp_index,
         root_index,
@@ -207,10 +211,18 @@ fn validate_request(request: &InstallRequest) -> Result<(), String> {
     if request.target == request.kernel || request.target.starts_with(&request.limine_directory) {
         return Err("target image must not be an installer source file".into());
     }
+    if request.target == request.shell {
+        return Err("target image must not be the userspace executable".into());
+    }
     let kernel_metadata = fs::symlink_metadata(&request.kernel)
         .map_err(|error| format!("cannot inspect kernel: {error}"))?;
     if !kernel_metadata.file_type().is_file() || kernel_metadata.file_type().is_symlink() {
         return Err("kernel must be a regular non-symlink file".into());
+    }
+    let shell_metadata = fs::symlink_metadata(&request.shell)
+        .map_err(|error| format!("cannot inspect userspace shell: {error}"))?;
+    if !shell_metadata.file_type().is_file() || shell_metadata.file_type().is_symlink() {
+        return Err("userspace shell must be a regular non-symlink file".into());
     }
     let limine_metadata = fs::metadata(&request.limine_directory)
         .map_err(|error| format!("cannot inspect Limine directory: {error}"))?;
@@ -245,6 +257,7 @@ fn populate_esp(
     image: &mut [u8],
     partition: &PartitionReport,
     kernel: &[u8],
+    shell: &[u8],
     boot_x64: &[u8],
     bios_sys: &[u8],
 ) -> Result<(), String> {
@@ -266,10 +279,11 @@ fn populate_esp(
         write_fat_file(&root, "EFI/BOOT/BOOTX64.EFI", boot_x64)?;
         write_fat_file(&root, "boot/limine-bios.sys", bios_sys)?;
         write_fat_file(&root, "boot/nexos-kernel", kernel)?;
+        write_fat_file(&root, "boot/nexsh", shell)?;
         write_fat_file(
             &root,
             "limine.conf",
-            b"timeout: 0\n\n/NexOS\n    protocol: limine\n    path: boot():/boot/nexos-kernel\n",
+            b"timeout: 0\n\n/NexOS\n    protocol: limine\n    path: boot():/boot/nexos-kernel\n    module_path: boot():/boot/nexsh\n    module_string: nexos-shell\n",
         )?;
     }
     filesystem
@@ -277,10 +291,12 @@ fn populate_esp(
         .map_err(|error| format!("cannot finalize EFI filesystem: {error}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn populate_root(
     image: &mut [u8],
     partition: &PartitionReport,
     kernel: &[u8],
+    shell: &[u8],
     root_uuid: [u8; 16],
     esp_index: u32,
     root_index: u32,
@@ -302,6 +318,7 @@ fn populate_root(
         "/system/kernel-location",
         b"esp:/boot/nexos-kernel\n",
     )?;
+    write_nexfs_file(&mut filesystem, "/bin/nexsh", shell)?;
     write_nexfs_file(
         &mut filesystem,
         "/etc/nexos-release",
@@ -324,9 +341,11 @@ fn populate_root(
         &mut filesystem,
         "/system/install-manifest",
         format!(
-            "format=1\nversion={VERSION}\nesp_partition={esp_index}\nroot_partition={root_index}\nkernel_bytes={}\nkernel_crc32={:08x}\n",
+            "format=2\nversion={VERSION}\nesp_partition={esp_index}\nroot_partition={root_index}\nkernel_bytes={}\nkernel_crc32={:08x}\nshell_bytes={}\nshell_crc32={:08x}\n",
             kernel.len(),
-            nexos_storage::crc32(kernel)
+            nexos_storage::crc32(kernel),
+            shell.len(),
+            nexos_storage::crc32(shell)
         )
         .as_bytes(),
     )?;
@@ -348,6 +367,7 @@ fn verify_esp(image: &[u8], partition: &PartitionReport) -> Result<u8, String> {
         "EFI/BOOT/BOOTX64.EFI",
         "boot/limine-bios.sys",
         "boot/nexos-kernel",
+        "boot/nexsh",
         "limine.conf",
     ] {
         let mut file = root
@@ -380,6 +400,7 @@ fn verify_root(image: &[u8], partition: &PartitionReport) -> Result<([u8; 16], u
         "/etc/nexos-release",
         "/etc/fstab",
         "/system/install-manifest",
+        "/bin/nexsh",
     ] {
         let stat = filesystem
             .stat(path)
@@ -485,15 +506,18 @@ mod tests {
         let directory = test_directory("guided");
         fs::create_dir_all(&directory).unwrap();
         let kernel = directory.join("nexos-kernel");
+        let shell = directory.join("nexsh");
         let limine = directory.join("limine");
         fs::create_dir_all(&limine).unwrap();
         fs::write(&kernel, b"test-kernel-elf").unwrap();
+        fs::write(&shell, b"test-shell-elf").unwrap();
         fs::write(limine.join("BOOTX64.EFI"), b"test-efi-loader").unwrap();
         fs::write(limine.join("limine-bios.sys"), b"test-bios-stage").unwrap();
         let target = directory.join("installed.img");
         let report = install(&InstallRequest {
             target: target.clone(),
             kernel,
+            shell,
             limine_directory: limine,
             size_mib: 128,
             mode: InstallMode::Guided(GuidedMode::Combined),
@@ -502,7 +526,7 @@ mod tests {
             install_bios_stage: false,
         })
         .unwrap();
-        assert_eq!(report.verified_files, 8);
+        assert_eq!(report.verified_files, 10);
         assert_eq!(report.esp_partition, 2);
         assert_eq!(report.root_partition, 3);
         assert_eq!(inspect_image(&target).unwrap().partitions.len(), 3);
@@ -514,9 +538,11 @@ mod tests {
         let directory = test_directory("manual");
         fs::create_dir_all(&directory).unwrap();
         let kernel = directory.join("nexos-kernel");
+        let shell = directory.join("nexsh");
         let limine = directory.join("limine");
         fs::create_dir_all(&limine).unwrap();
         fs::write(&kernel, b"test-kernel-elf").unwrap();
+        fs::write(&shell, b"test-shell-elf").unwrap();
         fs::write(limine.join("BOOTX64.EFI"), b"test-efi-loader").unwrap();
         fs::write(limine.join("limine-bios.sys"), b"test-bios-stage").unwrap();
         let target = directory.join("manual.img");
@@ -532,6 +558,7 @@ mod tests {
         install(&InstallRequest {
             target: target.clone(),
             kernel,
+            shell,
             limine_directory: limine,
             size_mib: 128,
             mode: InstallMode::Manual {
@@ -554,9 +581,11 @@ mod tests {
         let directory = test_directory("confirm");
         fs::create_dir_all(&directory).unwrap();
         let kernel = directory.join("nexos-kernel");
+        let shell = directory.join("nexsh");
         let limine = directory.join("limine");
         fs::create_dir_all(&limine).unwrap();
         fs::write(&kernel, b"kernel").unwrap();
+        fs::write(&shell, b"shell").unwrap();
         fs::write(limine.join("BOOTX64.EFI"), b"efi").unwrap();
         fs::write(limine.join("limine-bios.sys"), b"bios").unwrap();
         let target = directory.join("refused.img");
@@ -564,6 +593,7 @@ mod tests {
             install(&InstallRequest {
                 target: target.clone(),
                 kernel,
+                shell,
                 limine_directory: limine,
                 size_mib: 128,
                 mode: InstallMode::Guided(GuidedMode::Combined),

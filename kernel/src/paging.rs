@@ -48,6 +48,39 @@ impl PagingInfo {
     }
 
     #[must_use]
+    pub fn user_range_accessible(&self, address: u64, length: usize, writable: bool) -> bool {
+        if length == 0 {
+            return true;
+        }
+        let Ok(length) = u64::try_from(length) else {
+            return false;
+        };
+        let Some(last) = address.checked_add(length - 1) else {
+            return false;
+        };
+        if address >= 0x0000_8000_0000_0000 || last >= 0x0000_8000_0000_0000 {
+            return false;
+        }
+        let mut page = address & !(PAGE_SIZE - 1);
+        let last_page = last & !(PAGE_SIZE - 1);
+        loop {
+            let Some(mapping) = self.translate(page) else {
+                return false;
+            };
+            if mapping.flags & USER_ACCESSIBLE == 0 || (writable && mapping.flags & WRITABLE == 0) {
+                return false;
+            }
+            if page == last_page {
+                return true;
+            }
+            let Some(next) = page.checked_add(PAGE_SIZE) else {
+                return false;
+            };
+            page = next;
+        }
+    }
+
+    #[must_use]
     pub fn translate(&self, virtual_address: u64) -> Option<Mapping> {
         let indices = [
             (virtual_address >> 39) & 0x1ff,

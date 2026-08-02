@@ -1,0 +1,18 @@
+[package]
+name = "nexos-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nexos-abi = { path = "../../crates/nexos-abi" }
+nexos-userspace = { path = "../../crates/nexos-userspace" }
+
+[[bin]]
+name = "nexsh"
+path = "src/main.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true

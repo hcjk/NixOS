@@ -20,11 +20,13 @@ mod monitor;
 mod paging;
 mod pci;
 mod ps2;
+mod rootfs;
 mod runtime;
 mod serial;
 mod storage;
 mod syscall;
 mod usb;
+mod user;
 mod xhci;
 
 use core::arch::{asm, global_asm};
@@ -100,7 +102,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.12.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.13.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -117,8 +119,9 @@ extern "C" fn kernel_main() -> ! {
     let install_payload = installer::InstallPayload::from_bootloader(executable, modules);
     let _ = writeln!(
         serial,
-        "installer payload: kernel={} bytes, BOOTX64.EFI={}, BIOS HDD={}, BIOS SYS={}, ready={}",
+        "installer payload: kernel={} bytes, shell={}, BOOTX64.EFI={}, BIOS HDD={}, BIOS SYS={}, ready={}",
         install_payload.kernel.len(),
+        install_payload.shell.map_or(0, <[u8]>::len),
         install_payload.boot_x64.map_or(0, <[u8]>::len),
         install_payload.limine_hdd.map_or(0, <[u8]>::len),
         install_payload.limine_bios.map_or(0, <[u8]>::len),
@@ -221,7 +224,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.12.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.13.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -327,10 +330,28 @@ extern "C" fn kernel_main() -> ! {
             );
         }
     }
-    let _ = writeln!(
-        serial,
-        "milestone 12 live USB class I/O ready; entering kernel monitor"
-    );
+    let root = rootfs::RootFileSystem::discover(&mut storage);
+    if let Some(root) = root.as_ref() {
+        let mount = root.mount_info();
+        let _ = writeln!(
+            serial,
+            "rootfs: mounted NexFS disk{}p{} at / (LBA {} +{}, UUID prefix={:02x}{:02x}{:02x}{:02x})",
+            mount.disk_index,
+            mount.partition_index,
+            mount.first_lba,
+            mount.sector_count,
+            mount.uuid[0],
+            mount.uuid[1],
+            mount.uuid[2],
+            mount.uuid[3]
+        );
+    } else {
+        let _ = writeln!(
+            serial,
+            "rootfs: no mountable NexFS root; recovery monitor selected"
+        );
+    }
+    let _ = writeln!(serial, "milestone 13 filesystem-backed userspace ready");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(
         console,
@@ -363,6 +384,7 @@ extern "C" fn kernel_main() -> ! {
         &pci,
         &mut usb,
         &mut storage,
+        root,
         install_payload,
         interrupt_controller,
         monitor::BootMetadata::new(memory_map.entries().len(), rsdp_address),

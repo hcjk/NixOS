@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $buildDirectory = Join-Path $root 'build'
 $kernel = Join-Path $root 'target\x86_64-nexos\debug\nexos-kernel'
+$shell = Join-Path $root 'target\x86_64-nexos-user\release\nexsh'
 $limine = Join-Path $root 'vendor\limine\limine-binary'
 $limineTool = Join-Path $limine 'limine-tool-windows-x86\limine.exe'
 $iso = Join-Path $buildDirectory "$ArtifactName.iso"
@@ -43,6 +44,9 @@ if (-not (Test-Path -LiteralPath $limineTool)) {
 if (-not (Test-Path -LiteralPath $kernel)) {
     throw 'The kernel is missing. Run scripts\build-kernel.ps1 first.'
 }
+if (-not (Test-Path -LiteralPath $shell)) {
+    throw 'The userspace shell is missing. Run scripts\build-userspace.ps1 first.'
+}
 if (Test-Path -LiteralPath $iso) {
     throw "Refusing to overwrite existing ISO: $iso"
 }
@@ -68,6 +72,7 @@ $efiDirectory = Join-Path $staging 'EFI\BOOT'
 New-Item -ItemType Directory -Force -Path $bootDirectory, $efiDirectory | Out-Null
 
 Copy-Item -LiteralPath $kernel -Destination (Join-Path $staging 'boot\nexos-kernel')
+Copy-Item -LiteralPath $shell -Destination (Join-Path $staging 'boot\nexsh')
 Copy-Item -LiteralPath (Join-Path $limine 'limine-bios.sys') -Destination $bootDirectory
 Copy-Item -LiteralPath (Join-Path $limine 'limine-bios-cd.bin') -Destination $bootDirectory
 Copy-Item -LiteralPath (Join-Path $limine 'limine-uefi-cd.bin') -Destination $bootDirectory
@@ -96,6 +101,8 @@ timeout: 0
     module_string: nexos-limine-hdd
     module_path: boot():/boot/limine/limine-bios.sys
     module_string: nexos-limine-bios
+    module_path: boot():/boot/nexsh
+    module_string: nexos-shell
 '@
 Set-Content -LiteralPath (Join-Path $staging 'limine.conf') `
     -Value $configuration -Encoding Ascii

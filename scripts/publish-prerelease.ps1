@@ -71,6 +71,11 @@ try {
             exit $LASTEXITCODE
         }
         & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $root 'scripts\build-userspace.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+        & powershell -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $root 'scripts\build-kernel.ps1')
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE

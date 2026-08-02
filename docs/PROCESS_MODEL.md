@@ -42,6 +42,13 @@ The `usertest` monitor command maps supervisor-protected user code and stack
 pages, enters ring 3, queries ABI version 1, exits, and verifies the returned
 status. This is an executable hardware-path test, not a simulated parser test.
 
+Installed systems extend that path by reading `/bin/nexsh` from NexFS,
+validating its ELF64 program headers, mapping each segment with user/write/NX
+permissions, zeroing BSS, and entering with a 64 KiB SysV-aligned stack.
+Read, Write, Open, Close, Stat, and ReadDir validate every user page before
+calling console or root-filesystem services. Exit returns synchronously to the
+kernel recovery monitor.
+
 ## VFS
 
 The VFS core defines filesystem operations for lookup, read, write, create,
@@ -52,5 +59,7 @@ routes lookups to the longest matching mount prefix.
 
 Milestone 8 supplies the syscall-facing userspace library, shell syntax,
 pipeline/redirection model, environment, history, and command registry.
-NexFS/FAT32 kernel mount adapters and executable files from the root filesystem
-remain integration work.
+Milestone 13 mounts the GPT NexFS root and launches a real separately linked
+shell from `/bin`. The first execution model intentionally runs one foreground
+process in the boot address space; separate page tables, Spawn/Wait scheduling,
+pipelines, and executable redirection remain later work.

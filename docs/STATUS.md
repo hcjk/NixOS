@@ -1,6 +1,6 @@
 # NexOS status
 
-Last verified: 2026-07-28
+Last verified: 2026-08-02
 
 ## Working
 
@@ -66,6 +66,17 @@ Last verified: 2026-07-28
   history.
 - A classified registry of 45 Unix-inspired commands plus `commands`,
   `shellparse`, and `shelltest` kernel diagnostics.
+- NexFS root-partition discovery by GPT type, mount metadata, and bounded
+  file/directory handles exposed through the versioned syscall ABI.
+- A separately linked, optimized 64-bit `/bin/nexsh` ELF installed into both
+  NexFS and the boot filesystem.
+- Validated ELF segment mapping, zero-filled BSS, a 64 KiB user stack with
+  SysV alignment, and synchronous ring-3 process launch.
+- Validated user-memory ranges for stdin/stdout, open, close, read, stat, and
+  directory-entry syscalls. Blocking input temporarily enables IRQ delivery
+  around `HLT` and restores the masked syscall invariant afterward.
+- The default installed-system prompt is `nexsh>` with working `help`,
+  `uname`, `pwd`, `echo`, `ls`, `cat`, `stat`, `clear`, and `exit` commands.
 - PCI xHCI discovery, firmware ownership handoff, controller halt/reset/start,
   4 KiB DMA command and event rings, ERST/DCBAA setup, scratchpad allocation,
   and bounded polling.
@@ -198,13 +209,19 @@ installs NexOS onto it through BOT/SCSI, verifies the result, and removes the
 device. Hub, HID, block writes, cache flush, and disconnect accounting all
 complete before release publication.
 
+The milestone-13 release gate performs a fresh in-OS installation, removes
+the ISO, and boots the installed disk under both SeaBIOS and UEFI. Each boot
+must mount disk0p3 as `/`, validate and load `/bin/nexsh`, reach `nexsh>`, run
+`uname`, read `/etc/nexos-release`, and enumerate the NexFS root directory.
+The existing xHCI gate also installs the expanded root through BOT/SCSI.
+
 ## Not implemented yet
 
-Page-table frame reclamation, HPET clock use, PCI ECAM access, power-off
-through the FADT, SMP, file-backed kernel VFS mounts, general userspace
-executables, a filesystem-backed shell, USB hotplug re-enumeration, multiple
-USB LUNs, UAS, EHCI/OHCI/UHCI, NVMe, general FAT32 long-file-name creation,
-and NexFS journaling remain later work.
+Page-table frame reclamation, separate per-process page tables, asynchronous
+process scheduling, `Spawn`/`Wait`, multiprocess pipelines and redirection,
+HPET clock use, PCI ECAM access, power-off through the FADT, SMP, USB hotplug
+re-enumeration, multiple USB LUNs, UAS, EHCI/OHCI/UHCI, NVMe, general FAT32
+long-file-name creation, and NexFS journaling remain later work.
 
 The in-OS installer is a deliberately narrow real-hardware preview: BIOS or
 UEFI x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI, legacy IDE,

@@ -44,8 +44,11 @@ class QemuSession:
         raise TimeoutError("QEMU did not open its serial console within 30 seconds")
 
     def wait_for(self, marker: bytes, timeout: float) -> None:
+        self.wait_for_since(marker, 0, timeout)
+
+    def wait_for_since(self, marker: bytes, start: int, timeout: float) -> None:
         deadline = time.monotonic() + timeout
-        while marker not in self.transcript:
+        while marker not in self.transcript[start:]:
             if self.process.poll() is not None:
                 raise RuntimeError(
                     f"QEMU exited while waiting for {marker!r}: {self.process.returncode}\n"
@@ -67,9 +70,14 @@ class QemuSession:
                 continue
 
     def type_command(self, command: str) -> None:
-        for byte in f"{command}\r".encode("ascii"):
+        for byte in command.encode("ascii"):
+            start = len(self.transcript)
             self.socket.sendall(bytes([byte]))
-            time.sleep(0.02)
+            # A ring-3 read and write syscall occurs for each byte. Waiting for
+            # the echo makes the check independent of QEMU's UART FIFO timing.
+            self.wait_for_since(bytes([byte]), start, 10)
+            time.sleep(0.08)
+        self.socket.sendall(b"\r")
 
     def tail(self) -> str:
         return bytes(self.transcript[-4096:]).decode("utf-8", errors="replace")
@@ -146,10 +154,16 @@ def boot_and_require_prompt(
     port = reserve_tcp_port()
     command = qemu_command(qemu, disk, port, firmware=firmware)
     with QemuSession(command, port) as session:
-        session.wait_for(b"nexos>", timeout)
-        if b"installer payload:" not in session.transcript:
-            raise RuntimeError(f"{label} boot reached an unexpected prompt")
-        print(f"{label} installed-disk boot reached the NexOS prompt")
+        session.wait_for(b"nexsh>", timeout)
+        if b"rootfs: launching /bin/nexsh" not in session.transcript:
+            raise RuntimeError(f"{label} boot did not launch the NexFS userspace shell")
+        session.type_command("uname")
+        session.wait_for(b"NexOS 0.13.0-dev x86_64 (ring-3 userspace)", timeout)
+        session.type_command("cat /etc/nexos-release")
+        session.wait_for(b"VERSION=0.13.0-dev", timeout)
+        session.type_command("ls /")
+        session.wait_for(b"home/", timeout)
+        print(f"{label} installed-disk boot reached and exercised /bin/nexsh")
 
 
 def main() -> int:

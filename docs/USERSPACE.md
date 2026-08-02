@@ -1,7 +1,7 @@
 # NexOS userspace and shell frontend
 
 The `nexos-userspace` crate is a freestanding, `no_std` library shared by
-future ring-3 programs. It is specific to the versioned NexOS ABI and does not
+ring-3 programs. It is specific to the versioned NexOS ABI and does not
 implement the Linux syscall ABI.
 
 ## Syscall runtime
@@ -35,11 +35,19 @@ truncates entries safely.
 
 The command registry contains the planned 45 commands in five classes:
 built-ins; file commands; system commands; storage commands; and utilities.
-The kernel monitor exposes `commands`, `shelltest`, and `shellparse` so this
-frontend can be tested before the root filesystem launches the final ring-3
-shell.
+Installed systems discover a GPT NexFS root, validate `/bin/nexsh` as an
+x86-64 ELF, map its read/execute and read/write segments with user permissions,
+zero BSS, create a 64 KiB user stack, and enter it at ring 3. The optimized
+shell is separately linked at `0x40000000` and installed into the root and boot
+filesystems.
 
-Filesystem-backed execution, process pipelines, and interactive ring-3 line
-editing depend on the NexFS VFS adapter and executable packaging. Those are
-the next integration steps; the syntax and ABI-facing userspace core are
-already host- and kernel-build tested.
+The live shell uses validated Read, Write, Open, Close, Stat, and ReadDir
+syscalls. It provides `help`, `uname`, `pwd`, `echo`, `ls`, `cat`, `stat`,
+`clear`, and `exit`. ISO boots without a NexFS root use the kernel recovery
+monitor; installed disks use `nexsh>` by default.
+
+The richer parser and 45-command registry remain the model for later process
+spawning, pipelines, redirection, environment mutation, and standalone
+programs. Milestone 13 deliberately runs one synchronous foreground userspace
+process in the boot address space; separate process page tables and
+asynchronous scheduling are subsequent work.

@@ -42,6 +42,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     println!("  target: {}", parsed.target.display());
     println!("  mode: {}", parsed.mode.name());
     println!("  kernel: {}", parsed.kernel.display());
+    println!("  userspace shell: {}", parsed.shell.display());
     println!("  Limine: {}", parsed.limine.display());
     if let InstallMode::Guided(_) = parsed.mode {
         println!("  target size: {} MiB", parsed.size_mib);
@@ -50,6 +51,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let report = install(&InstallRequest {
         target: parsed.target,
         kernel: parsed.kernel,
+        shell: parsed.shell,
         limine_directory: parsed.limine,
         size_mib: parsed.size_mib,
         mode: parsed.mode,
@@ -64,6 +66,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
 struct ParsedArguments {
     target: PathBuf,
     kernel: PathBuf,
+    shell: PathBuf,
     limine: PathBuf,
     size_mib: usize,
     mode: InstallMode,
@@ -72,9 +75,11 @@ struct ParsedArguments {
 }
 
 impl ParsedArguments {
+    #[allow(clippy::too_many_lines)]
     fn parse(arguments: &[String]) -> Result<Self, String> {
         let mut target = None;
         let mut kernel = None;
+        let mut shell = None;
         let mut limine = None;
         let mut size_mib = 128;
         let mut guided_mode = GuidedMode::Combined;
@@ -93,6 +98,10 @@ impl ParsedArguments {
                 }
                 "--kernel" => {
                     kernel = Some(PathBuf::from(value(arguments, index, "--kernel")?));
+                    index += 2;
+                }
+                "--shell" => {
+                    shell = Some(PathBuf::from(value(arguments, index, "--shell")?));
                     index += 2;
                 }
                 "--limine" => {
@@ -162,6 +171,7 @@ impl ParsedArguments {
         Ok(Self {
             target: target.ok_or("--target is required")?,
             kernel: kernel.ok_or("--kernel is required")?,
+            shell: shell.ok_or("--shell is required")?,
             limine: limine.ok_or("--limine is required")?,
             size_mib,
             mode,
@@ -176,6 +186,7 @@ fn interactive() -> Result<(), String> {
     println!("This release installs only to ordinary disk-image files.");
     let target = prompt("Target image path: ")?;
     let kernel = prompt("NexOS kernel ELF path: ")?;
+    let shell = prompt("NexOS userspace shell ELF path: ")?;
     let limine = prompt("Limine directory: ")?;
     let size = prompt("Image size in MiB [128]: ")?;
     let size_mib = if size.is_empty() {
@@ -192,6 +203,7 @@ fn interactive() -> Result<(), String> {
     let report = install(&InstallRequest {
         target: PathBuf::from(&target),
         kernel: PathBuf::from(kernel),
+        shell: PathBuf::from(shell),
         limine_directory: PathBuf::from(limine),
         size_mib,
         mode: InstallMode::Guided(GuidedMode::Combined),
@@ -238,11 +250,11 @@ fn prompt(label: &str) -> Result<String, String> {
 fn usage() -> String {
     [
         "usage:",
-        "  nex-install --target <image> --kernel <elf> --limine <dir>",
+        "  nex-install --target <image> --kernel <elf> --shell <elf> --limine <dir>",
         "              [--size-mib 128] [--mode combined|uefi|bios]",
         "              --yes --confirm <image>",
         "  nex-install --manual --target <image> --esp <index> --root <index>",
-        "              [--bios] --kernel <elf> --limine <dir>",
+        "              [--bios] --kernel <elf> --shell <elf> --limine <dir>",
         "              --yes --confirm <image>",
         "  nex-install verify <image>",
         "",

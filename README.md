@@ -33,7 +33,9 @@ preview:
 - a mount-aware VFS core with canonical path traversal; and
 - a real ring-3 `IRETQ` transition and versioned `SYSCALL`/`SYSRET` entry path;
 - a freestanding userspace syscall library and bounded shell parser with
-  quoting, environment expansion, history, pipelines, and redirection; and
+  quoting, environment expansion, history, pipelines, and redirection;
+- automatic NexFS root discovery, validated ELF64 loading, user-pointer
+  checks, and a filesystem-backed `/bin/nexsh` ring-3 shell; and
 - a 45-command Unix-inspired registry covering file, system, storage, and
   utility commands; and
 - a polling xHCI controller with firmware handoff, DMA command/event and class
@@ -46,8 +48,8 @@ preview:
   confirmed `nex-install` path for 512-byte-sector AHCI/IDE disks on UEFI
   x86-64 hardware.
 
-Filesystem-backed ring-3 command execution, SMP, and broader
-storage-controller support remain tracked work. See
+Multiprocess pipelines, SMP, and broader storage-controller support remain
+tracked work. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Developer setup (Windows)
@@ -166,16 +168,17 @@ At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
 `vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `reboot`, or `halt`.
 `usertest` executes a small ring-3 program that queries ABI v1 with `SYSCALL`
 and exits back to the monitor. `disktest` is read-only: it reads LBA 0, reports
-its CRC32, and never writes the disk. The Unix-like shell frontend is present,
-but the filesystem-backed ring-3 shell is not yet the default prompt.
+its CRC32, and never writes the disk. Installed systems mount their NexFS root,
+load `/bin/nexsh` as a validated ELF64 executable, and use `nexsh>` as the
+default prompt. ISO/recovery boots without a root retain the `nexos>` monitor.
 The monitor accepts input from PS/2/i8042, USB boot-protocol keyboards, and
 COM1. USB mice generate events, and BOT/SCSI disks appear as `/dev/usbN`.
 
 Release builds run `scripts/qemu-installer-smoke.py` and
 `scripts/qemu-usb-smoke.py`. Publication requires a fresh in-OS install that
-boots without its ISO under SeaBIOS and UEFI, plus live USB-only keyboard and
-mouse input, one-level hub enumeration, USB-disk installation, and disconnect
-handling.
+boots without its ISO under SeaBIOS and UEFI, launches `/bin/nexsh`, and reads
+files from NexFS in ring 3, plus live USB-only keyboard and mouse input,
+one-level hub enumeration, USB-disk installation, and disconnect handling.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

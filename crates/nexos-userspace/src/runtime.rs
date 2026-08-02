@@ -1,4 +1,4 @@
-use nexos_abi::{Error, Syscall};
+use nexos_abi::{DirectoryEntry, Error, FileStat, Syscall};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SyscallResult(pub i64);
@@ -60,6 +60,107 @@ pub fn abi_version() -> Result<u32, Error> {
     u32::try_from(result).map_err(|_| Error::Io)
 }
 
+pub fn open(path: &[u8], flags: u32) -> Result<u32, Error> {
+    // SAFETY: The path slice remains valid for the duration of Open.
+    let result = unsafe {
+        syscall(
+            Syscall::Open,
+            [
+                path.as_ptr() as u64,
+                path.len() as u64,
+                u64::from(flags),
+                0,
+                0,
+                0,
+            ],
+        )
+    }
+    .into_result()?;
+    u32::try_from(result).map_err(|_| Error::BadHandle)
+}
+
+pub fn close(handle: u32) -> Result<(), Error> {
+    // SAFETY: Close consumes only a scalar descriptor.
+    unsafe { syscall(Syscall::Close, [u64::from(handle), 0, 0, 0, 0, 0]) }.into_result()?;
+    Ok(())
+}
+
+pub fn read(handle: u32, output: &mut [u8]) -> Result<usize, Error> {
+    // SAFETY: The mutable output remains valid until Read returns.
+    let result = unsafe {
+        syscall(
+            Syscall::Read,
+            [
+                u64::from(handle),
+                output.as_mut_ptr() as u64,
+                output.len() as u64,
+                0,
+                0,
+                0,
+            ],
+        )
+    }
+    .into_result()?;
+    usize::try_from(result).map_err(|_| Error::Io)
+}
+
+pub fn write(handle: u32, input: &[u8]) -> Result<usize, Error> {
+    // SAFETY: The input slice remains valid until Write returns.
+    let result = unsafe {
+        syscall(
+            Syscall::Write,
+            [
+                u64::from(handle),
+                input.as_ptr() as u64,
+                input.len() as u64,
+                0,
+                0,
+                0,
+            ],
+        )
+    }
+    .into_result()?;
+    usize::try_from(result).map_err(|_| Error::Io)
+}
+
+pub fn stat(path: &[u8], output: &mut FileStat) -> Result<(), Error> {
+    // SAFETY: Both the path and output remain valid until Stat returns.
+    unsafe {
+        syscall(
+            Syscall::Stat,
+            [
+                path.as_ptr() as u64,
+                path.len() as u64,
+                core::ptr::from_mut(output) as u64,
+                0,
+                0,
+                0,
+            ],
+        )
+    }
+    .into_result()?;
+    Ok(())
+}
+
+pub fn read_dir(handle: u32, output: &mut DirectoryEntry) -> Result<bool, Error> {
+    // SAFETY: The output entry remains valid until ReadDir returns.
+    let result = unsafe {
+        syscall(
+            Syscall::ReadDir,
+            [
+                u64::from(handle),
+                core::ptr::from_mut(output) as u64,
+                0,
+                0,
+                0,
+                0,
+            ],
+        )
+    }
+    .into_result()?;
+    Ok(result != 0)
+}
+
 pub fn exit(status: i32) -> ! {
     // SAFETY: Exit consumes only the scalar status argument.
     let encoded_status = u64::from_ne_bytes(i64::from(status).to_ne_bytes());
@@ -109,5 +210,15 @@ mod tests {
     fn decodes_shared_error_numbers() {
         assert_eq!(SyscallResult(-36).into_result(), Err(Error::NameTooLong));
         assert_eq!(SyscallResult(42).into_result(), Ok(42));
+    }
+
+    #[test]
+    fn host_file_wrappers_report_not_supported() {
+        let mut buffer = [0_u8; 8];
+        let mut metadata = FileStat::default();
+        assert_eq!(open(b"/", 0), Err(Error::NotSupported));
+        assert_eq!(read(0, &mut buffer), Err(Error::NotSupported));
+        assert_eq!(write(1, b"hello"), Err(Error::NotSupported));
+        assert_eq!(stat(b"/", &mut metadata), Err(Error::NotSupported));
     }
 }

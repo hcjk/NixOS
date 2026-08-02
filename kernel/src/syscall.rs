@@ -1,7 +1,9 @@
 use core::arch::{asm, global_asm};
+use core::cell::UnsafeCell;
+use core::mem::size_of;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use nexos_abi::{ABI_VERSION, Error, Syscall, SystemInfoSelector};
+use nexos_abi::{ABI_VERSION, DirectoryEntry, Error, FileStat, Syscall, SystemInfoSelector};
 
 use crate::gdt;
 use crate::memory::FrameAllocator;
@@ -27,6 +29,33 @@ static USER_CODE_PHYSICAL: AtomicU64 = AtomicU64::new(0);
 static SYSCALL_COUNT: AtomicU64 = AtomicU64::new(0);
 static LAST_SYSCALL: AtomicU64 = AtomicU64::new(u64::MAX);
 static LAST_EXIT_STATUS: AtomicU64 = AtomicU64::new(0);
+
+pub type ReadService = unsafe fn(*mut (), u32, &mut [u8]) -> Result<usize, Error>;
+pub type WriteService = unsafe fn(*mut (), u32, &[u8]) -> Result<usize, Error>;
+pub type OpenService = unsafe fn(*mut (), &[u8], u32) -> Result<u32, Error>;
+pub type CloseService = unsafe fn(*mut (), u32) -> Result<(), Error>;
+pub type StatService = unsafe fn(*mut (), &[u8]) -> Result<FileStat, Error>;
+pub type ReadDirService = unsafe fn(*mut (), u32) -> Result<Option<DirectoryEntry>, Error>;
+
+#[derive(Clone, Copy)]
+pub struct UserServiceTable {
+    pub context: *mut (),
+    pub paging: *const PagingInfo,
+    pub read: ReadService,
+    pub write: WriteService,
+    pub open: OpenService,
+    pub close: CloseService,
+    pub stat: StatService,
+    pub read_dir: ReadDirService,
+}
+
+struct ServiceCell(UnsafeCell<Option<UserServiceTable>>);
+
+// SAFETY: NexOS currently enables one processor. A service table is installed
+// immediately before the synchronous ring-3 transition and removed after it.
+unsafe impl Sync for ServiceCell {}
+
+static USER_SERVICES: ServiceCell = ServiceCell(UnsafeCell::new(None));
 
 #[unsafe(no_mangle)]
 static mut NEXOS_SYSCALL_STACK_TOP: u64 = 0;
@@ -261,6 +290,18 @@ pub fn run_ring3_self_test(
     Ok(status)
 }
 
+pub fn run_user_program(entry: u64, stack: u64, services: UserServiceTable) -> i64 {
+    let selectors = gdt::selectors();
+    // SAFETY: User execution is synchronous on the boot CPU. The context and
+    // paging pointers remain live until `nexos_enter_user` returns through Exit.
+    unsafe {
+        *USER_SERVICES.0.get() = Some(services);
+        let status = nexos_enter_user(entry, stack, selectors.user_code, selectors.user_data);
+        *USER_SERVICES.0.get() = None;
+        status
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum UserTestError {
     SyscallUnavailable,
@@ -288,14 +329,113 @@ extern "C" fn nexos_syscall_dispatch(frame: &SyscallFrame) -> i64 {
             }
             frame.argument_0 as i64
         }
+        Syscall::Open => with_services(|services| {
+            let length = usize::try_from(frame.argument_1).map_err(|_| Error::NameTooLong)?;
+            let path = user_input(services, frame.argument_0, length)?;
+            // SAFETY: The service table's context and callback stay live for
+            // this synchronous syscall.
+            unsafe { (services.open)(services.context, path, frame.argument_2 as u32) }
+                .map(i64::from)
+        }),
+        Syscall::Close => with_services(|services| {
+            // SAFETY: See Open; Close has no pointer arguments.
+            unsafe { (services.close)(services.context, frame.argument_0 as u32) }?;
+            Ok(0)
+        }),
+        Syscall::Read => with_services(|services| {
+            let length = usize::try_from(frame.argument_2).map_err(|_| Error::InvalidArgument)?;
+            let output = user_output(services, frame.argument_1, length)?;
+            // SAFETY: The validated output is writable user memory.
+            unsafe { (services.read)(services.context, frame.argument_0 as u32, output) }
+                .and_then(|amount| i64::try_from(amount).map_err(|_| Error::Io))
+        }),
+        Syscall::Write => with_services(|services| {
+            let length = usize::try_from(frame.argument_2).map_err(|_| Error::InvalidArgument)?;
+            let input = user_input(services, frame.argument_1, length)?;
+            // SAFETY: The validated input remains readable for the callback.
+            unsafe { (services.write)(services.context, frame.argument_0 as u32, input) }
+                .and_then(|amount| i64::try_from(amount).map_err(|_| Error::Io))
+        }),
+        Syscall::Stat => with_services(|services| {
+            let length = usize::try_from(frame.argument_1).map_err(|_| Error::NameTooLong)?;
+            let path = user_input(services, frame.argument_0, length)?;
+            let output = user_output(services, frame.argument_2, size_of::<FileStat>())?;
+            // SAFETY: Callback lifetime matches this syscall and output was
+            // validated as a writable, correctly sized user region.
+            let stat = unsafe { (services.stat)(services.context, path) }?;
+            unsafe { core::ptr::write_unaligned(output.as_mut_ptr().cast::<FileStat>(), stat) };
+            Ok(0)
+        }),
+        Syscall::ReadDir => with_services(|services| {
+            let output = user_output(services, frame.argument_1, size_of::<DirectoryEntry>())?;
+            // SAFETY: The service context is live and the output region was
+            // validated before writing the fixed-layout ABI entry.
+            let entry = unsafe { (services.read_dir)(services.context, frame.argument_0 as u32) }?;
+            if let Some(entry) = entry {
+                unsafe {
+                    core::ptr::write_unaligned(output.as_mut_ptr().cast::<DirectoryEntry>(), entry);
+                }
+                Ok(1)
+            } else {
+                Ok(0)
+            }
+        }),
         Syscall::SystemInfo => match frame.argument_0 {
             value if value == SystemInfoSelector::AbiVersion as u64 => i64::from(ABI_VERSION),
             value if value == SystemInfoSelector::PageSize as u64 => PAGE_SIZE as i64,
+            value if value == SystemInfoSelector::ProcessId as u64 => 2,
             _ => Error::InvalidArgument.as_syscall_result(),
         },
         Syscall::ClockGet => crate::interrupts::uptime_milliseconds() as i64,
         _ => Error::NotSupported.as_syscall_result(),
     }
+}
+
+fn with_services(operation: impl FnOnce(UserServiceTable) -> Result<i64, Error>) -> i64 {
+    // SAFETY: The table is only accessed on the single boot CPU while a
+    // synchronous user program is running.
+    let Some(services) = (unsafe { *USER_SERVICES.0.get() }) else {
+        return Error::NotSupported.as_syscall_result();
+    };
+    operation(services).unwrap_or_else(Error::as_syscall_result)
+}
+
+fn user_input(
+    services: UserServiceTable,
+    address: u64,
+    length: usize,
+) -> Result<&'static [u8], Error> {
+    validate_user_range(services, address, length, false)?;
+    // SAFETY: The page-table walk validated this complete readable range.
+    Ok(unsafe { core::slice::from_raw_parts(address as *const u8, length) })
+}
+
+fn user_output(
+    services: UserServiceTable,
+    address: u64,
+    length: usize,
+) -> Result<&'static mut [u8], Error> {
+    validate_user_range(services, address, length, true)?;
+    // SAFETY: The page-table walk validated this complete writable range and
+    // syscall dispatch creates the only kernel reference to it.
+    Ok(unsafe { core::slice::from_raw_parts_mut(address as *mut u8, length) })
+}
+
+fn validate_user_range(
+    services: UserServiceTable,
+    address: u64,
+    length: usize,
+    writable: bool,
+) -> Result<(), Error> {
+    if services.paging.is_null() || (length != 0 && address == 0) {
+        return Err(Error::InvalidArgument);
+    }
+    // SAFETY: The service table guarantees the PagingInfo outlives user mode.
+    let paging = unsafe { &*services.paging };
+    if !paging.user_range_accessible(address, length, writable) {
+        return Err(Error::PermissionDenied);
+    }
+    Ok(())
 }
 
 unsafe fn read_msr(msr: u32) -> u64 {

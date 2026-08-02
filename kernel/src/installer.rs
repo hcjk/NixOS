@@ -1,3 +1,4 @@
+use alloc::format;
 use alloc::vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -10,8 +11,7 @@ use nexos_storage::{
 
 use crate::storage::StorageDevice;
 
-const CONFIGURATION: &[u8] =
-    b"timeout: 0\n\n/NexOS\n    protocol: limine\n    path: boot():/BOOT/NEXOS.ELF\n";
+const CONFIGURATION: &[u8] = b"timeout: 0\n\n/NexOS\n    protocol: limine\n    path: boot():/BOOT/NEXOS.ELF\n    module_path: boot():/BOOT/NEXSH.ELF\n    module_string: nexos-shell\n";
 
 #[derive(Clone, Copy)]
 pub enum BootSource {
@@ -27,6 +27,7 @@ pub struct InstallPayload {
     pub boot_x64: Option<&'static [u8]>,
     pub limine_hdd: Option<&'static [u8]>,
     pub limine_bios: Option<&'static [u8]>,
+    pub shell: Option<&'static [u8]>,
     pub source: BootSource,
 }
 
@@ -58,11 +59,16 @@ impl InstallPayload {
                     || module.path().ends_with("limine-bios.sys")
             })
             .map(|module| module.data());
+        let shell = modules
+            .iter()
+            .find(|module| module.cmdline() == "nexos-shell" || module.path().ends_with("nexsh"))
+            .map(|module| module.data());
         Self {
             kernel,
             boot_x64,
             limine_hdd,
             limine_bios,
+            shell,
             source,
         }
     }
@@ -73,6 +79,7 @@ impl InstallPayload {
             && self.boot_x64.is_some()
             && self.limine_hdd.is_some()
             && self.limine_bios.is_some()
+            && self.shell.is_some()
     }
 }
 
@@ -201,6 +208,7 @@ pub fn install(
     let boot_x64 = payload.boot_x64.ok_or(InstallerError::MissingPayload)?;
     let limine_hdd = payload.limine_hdd.ok_or(InstallerError::MissingPayload)?;
     let limine_bios = payload.limine_bios.ok_or(InstallerError::MissingPayload)?;
+    let shell = payload.shell.ok_or(InstallerError::MissingPayload)?;
     if payload.kernel.is_empty() {
         return Err(InstallerError::MissingPayload);
     }
@@ -239,6 +247,7 @@ pub fn install(
         filesystem.create_dir("/BOOT")?;
         filesystem.write_file("/EFI/BOOT/BOOTX64.EFI", boot_x64)?;
         filesystem.write_file("/BOOT/NEXOS.ELF", payload.kernel)?;
+        filesystem.write_file("/BOOT/NEXSH.ELF", shell)?;
         filesystem.write_file_lfn("/EFI/BOOT/limine.conf", "LIMINE~1.CON", CONFIGURATION)?;
         filesystem.write_file_lfn("/limine.conf", "LIMINE~1.CON", CONFIGURATION)?;
         filesystem.write_file_lfn("/limine-bios.sys", "LIMINE~1.SYS", limine_bios)?;
@@ -256,6 +265,34 @@ pub fn install(
         let mut root =
             PartitionDevice::new(device, layout.root.first_lba, layout.root.sector_count)?;
         nexfs::format(&mut root, root_uuid)?;
+        let mut filesystem = nexfs::NexFs::mount(&mut root)?;
+        for directory in ["/system", "/etc", "/bin", "/var", "/home"] {
+            filesystem.create_dir(directory)?;
+        }
+        write_nexfs_file(&mut filesystem, "/bin/nexsh", shell)?;
+        write_nexfs_file(
+            &mut filesystem,
+            "/etc/nexos-release",
+            b"NAME=NexOS\nVERSION=0.13.0-dev\nARCH=x86_64\n",
+        )?;
+        write_nexfs_file(
+            &mut filesystem,
+            "/etc/fstab",
+            b"root / nexfs rw 0 1\nesp /boot fat32 rw 0 2\n",
+        )?;
+        let manifest = format!(
+            "format=2\nversion=0.13.0-dev\nkernel_bytes={}\nkernel_crc32={:08x}\nshell_bytes={}\nshell_crc32={:08x}\n",
+            payload.kernel.len(),
+            crc32(payload.kernel),
+            shell.len(),
+            crc32(shell)
+        );
+        write_nexfs_file(
+            &mut filesystem,
+            "/system/install-manifest",
+            manifest.as_bytes(),
+        )?;
+        filesystem.unmount()?;
     }
     progress(InstallProgress::new(7, "flushing storage caches"));
     device.flush()?;
@@ -298,6 +335,14 @@ pub fn verify_installation(
             return Err(InstallerError::Verification);
         }
         drop(installed_kernel);
+        let installed_shell = filesystem.read_file("/BOOT/NEXSH.ELF")?;
+        if payload
+            .shell
+            .is_none_or(|expected| installed_shell.as_slice() != expected)
+        {
+            return Err(InstallerError::Verification);
+        }
+        drop(installed_shell);
         let configuration = filesystem.read_file("/EFI/BOOT/LIMINE~1.CON")?;
         if configuration != CONFIGURATION {
             return Err(InstallerError::Verification);
@@ -323,7 +368,42 @@ pub fn verify_installation(
         if superblock.uuid != expected_root_uuid {
             return Err(InstallerError::Verification);
         }
+        let mut filesystem = nexfs::NexFs::mount(&mut root)?;
+        for path in [
+            "/bin/nexsh",
+            "/etc/nexos-release",
+            "/etc/fstab",
+            "/system/install-manifest",
+        ] {
+            let stat = filesystem.stat(path)?;
+            if stat.kind != nexfs::FileType::Regular || stat.size == 0 {
+                return Err(InstallerError::Verification);
+            }
+        }
+        let shell_stat = filesystem.stat("/bin/nexsh")?;
+        let shell_size =
+            usize::try_from(shell_stat.size).map_err(|_| InstallerError::Verification)?;
+        let mut shell = vec![0_u8; shell_size];
+        if filesystem.read_file("/bin/nexsh", 0, &mut shell)? != shell.len()
+            || payload
+                .shell
+                .is_none_or(|expected| crc32(&shell) != crc32(expected))
+            || nexos_runtime::elf::ElfImage::parse(&shell).is_err()
+        {
+            return Err(InstallerError::Verification);
+        }
+        filesystem.unmount()?;
     }
+    Ok(())
+}
+
+fn write_nexfs_file<D: BlockDevice>(
+    filesystem: &mut nexfs::NexFs<'_, D>,
+    path: &str,
+    contents: &[u8],
+) -> Result<(), InstallerError> {
+    filesystem.create_file(path)?;
+    filesystem.write_file(path, 0, contents)?;
     Ok(())
 }
 

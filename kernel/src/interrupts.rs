@@ -122,6 +122,15 @@ pub fn wait_for_interrupt() {
     unsafe { asm!("hlt", options(nomem, nostack)) };
 }
 
+pub fn wait_for_interrupt_from_syscall() {
+    // SYSCALL enters with IF masked by IA32_FMASK. STI's one-instruction
+    // interrupt shadow makes HLT atomic with respect to newly arriving IRQs;
+    // CLI restores the syscall dispatcher's masked-interrupt invariant.
+    // SAFETY: The IDT and interrupt controllers are initialized before any
+    // userspace process can issue a blocking Read syscall.
+    unsafe { asm!("sti", "hlt", "cli", options(nomem, nostack)) };
+}
+
 pub fn trigger_breakpoint() {
     // SAFETY: Vector 3 has a present IDT handler and returns to the instruction
     // following INT3.

@@ -91,9 +91,18 @@ jobs:
           cargo test --workspace --exclude nexos-kernel
           cargo clippy --all-targets -- -D warnings
 
-      - name: Build freestanding kernel
+      - name: Build freestanding userspace and kernel
         shell: bash
         run: |
+          cargo rustc \
+            -p nexos-shell \
+            --release \
+            --target userspace/x86_64-nexos-user.json \
+            -Z json-target-spec \
+            -Z build-std=core,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem \
+            -- \
+            -C link-arg=-Tuserspace/linker.ld
           cargo rustc \
             -p nexos-kernel \
             --target kernel/x86_64-nexos.json \
@@ -111,12 +120,14 @@ jobs:
           set -euo pipefail
           mkdir -p build
           kernel="target/x86_64-nexos/debug/nexos-kernel"
+          shell="target/x86_64-nexos-user/release/nexsh"
           limine="vendor/limine/limine-binary"
           image="build/NexOS-v${VERSION}-x86_64.img"
 
           cargo run -p nexos-installer --bin nex-install -- \
             --target "$image" \
             --kernel "$kernel" \
+            --shell "$shell" \
             --limine "$limine" \
             --size-mib 128 \
             --mode combined \
@@ -131,12 +142,14 @@ jobs:
         run: |
           set -euo pipefail
           kernel="target/x86_64-nexos/debug/nexos-kernel"
+          shell="target/x86_64-nexos-user/release/nexsh"
           limine="vendor/limine/limine-binary"
           staging="build/iso-root"
           iso="build/NexOS-v${VERSION}-x86_64.iso"
 
           mkdir -p "$staging/boot/limine" "$staging/EFI/BOOT"
           cp "$kernel" "$staging/boot/nexos-kernel"
+          cp "$shell" "$staging/boot/nexsh"
           cp "$limine/limine-bios.sys" "$staging/boot/limine/"
           cp "$limine/limine-bios-cd.bin" "$staging/boot/limine/"
           cp "$limine/limine-uefi-cd.bin" "$staging/boot/limine/"
@@ -166,6 +179,8 @@ jobs:
             '    module_string: nexos-limine-hdd' \
             '    module_path: boot():/boot/limine/limine-bios.sys' \
             '    module_string: nexos-limine-bios' \
+            '    module_path: boot():/boot/nexsh' \
+            '    module_string: nexos-shell' \
             > "$staging/limine.conf"
 
           xorriso -as mkisofs \

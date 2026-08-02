@@ -13,11 +13,13 @@ use crate::memory::FrameAllocator;
 use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
 use crate::ps2::{self, Keyboard, Mouse};
+use crate::rootfs::RootFileSystem;
 use crate::runtime;
 use crate::serial::SerialPort;
 use crate::storage::{DeviceLocation, PartitionProbe, StorageManager};
 use crate::syscall;
 use crate::usb::UsbManager;
+use crate::user;
 use nexos_storage::{
     BIOS_BOOT_TYPE_GUID, BlockDevice, ESP_TYPE_GUID, NEXFS_TYPE_GUID, read_partition_table,
 };
@@ -53,6 +55,7 @@ pub struct Monitor<'a> {
     pci: &'a PciInventory,
     usb: &'a mut UsbManager,
     storage: &'a mut StorageManager,
+    root: Option<RootFileSystem>,
     install_payload: InstallPayload,
     controller: ControllerInfo,
     memory_region_count: usize,
@@ -67,6 +70,7 @@ pub struct MonitorContext<'a> {
     pci: &'a PciInventory,
     usb: &'a mut UsbManager,
     storage: &'a mut StorageManager,
+    root: Option<RootFileSystem>,
     install_payload: InstallPayload,
     controller: ControllerInfo,
     boot: BootMetadata,
@@ -82,6 +86,7 @@ impl<'a> MonitorContext<'a> {
         pci: &'a PciInventory,
         usb: &'a mut UsbManager,
         storage: &'a mut StorageManager,
+        root: Option<RootFileSystem>,
         install_payload: InstallPayload,
         controller: ControllerInfo,
         boot: BootMetadata,
@@ -94,6 +99,7 @@ impl<'a> MonitorContext<'a> {
             pci,
             usb,
             storage,
+            root,
             install_payload,
             controller,
             boot,
@@ -120,6 +126,7 @@ impl<'a> Monitor<'a> {
             pci: context.pci,
             usb: context.usb,
             storage: context.storage,
+            root: context.root,
             install_payload: context.install_payload,
             controller: context.controller,
             memory_region_count: context.boot.memory_region_count,
@@ -128,6 +135,9 @@ impl<'a> Monitor<'a> {
     }
 
     pub fn run(&mut self) -> ! {
+        if self.root.is_some() {
+            self.launch_default_userspace();
+        }
         self.write_line(
             INFO,
             format_args!("Interactive PS/2 and COM1 kernel monitor is ready."),
@@ -179,6 +189,76 @@ impl<'a> Monitor<'a> {
         }
     }
 
+    fn launch_default_userspace(&mut self) {
+        let loaded = {
+            let Some(root) = self.root.as_ref() else {
+                return;
+            };
+            user::load_program(
+                root,
+                self.storage,
+                self.paging,
+                self.allocator,
+                b"/bin/nexsh",
+            )
+        };
+        let loaded = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                self.write_line(
+                    WARNING,
+                    format_args!("rootfs: cannot load /bin/nexsh: {error}"),
+                );
+                return;
+            }
+        };
+        let Some(process) = runtime::create_user_process(
+            self.paging.level_4_frame(),
+            loaded.entry,
+            loaded.stack_pointer,
+        ) else {
+            self.write_line(WARNING, format_args!("rootfs: process table is full"));
+            return;
+        };
+        let Some(root) = self.root.as_mut() else {
+            return;
+        };
+        let mut session = UserSessionContext {
+            console: core::ptr::from_mut(self.console),
+            serial: core::ptr::from_mut(self.serial),
+            keyboard: core::ptr::from_mut(&mut self.keyboard),
+            usb: core::ptr::from_mut(self.usb),
+            storage: core::ptr::from_mut(self.storage),
+            root: core::ptr::from_mut(root),
+        };
+        self.write_line(
+            INFO,
+            format_args!(
+                "rootfs: launching /bin/nexsh as pid {} at {:#x}",
+                process.process.0, loaded.entry
+            ),
+        );
+        let services = syscall::UserServiceTable {
+            context: core::ptr::from_mut(&mut session).cast(),
+            paging: core::ptr::from_ref(self.paging),
+            read: session_read,
+            write: session_write,
+            open: session_open,
+            close: session_close,
+            stat: session_stat,
+            read_dir: session_read_dir,
+        };
+        let status = syscall::run_user_program(loaded.entry, loaded.stack_pointer, services);
+        let status = i32::try_from(status).unwrap_or(-1);
+        let finalized = runtime::finish_user_process(process, status);
+        self.write_line(
+            MUTED,
+            format_args!(
+                "userspace shell exited with status {status}; recovery monitor active (finalized={finalized})"
+            ),
+        );
+    }
+
     #[allow(clippy::too_many_lines)]
     fn execute(&mut self, command: &[u8]) {
         match command {
@@ -219,7 +299,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.12.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.13.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -1422,6 +1502,109 @@ fn write_install_progress(
         progress.total,
         progress.label
     );
+}
+
+struct UserSessionContext {
+    console: *mut Console,
+    serial: *mut SerialPort,
+    keyboard: *mut Keyboard,
+    usb: *mut UsbManager,
+    storage: *mut StorageManager,
+    root: *mut RootFileSystem,
+}
+
+unsafe fn session_read(
+    context: *mut (),
+    descriptor: u32,
+    output: &mut [u8],
+) -> Result<usize, nexos_abi::Error> {
+    if output.is_empty() {
+        return Ok(0);
+    }
+    if descriptor != 0 {
+        // SAFETY: The synchronous user transition keeps every session pointer
+        // valid and exclusively borrowed until the syscall returns.
+        let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+        let root = unsafe { &mut *session.root };
+        let storage = unsafe { &mut *session.storage };
+        return root.read(storage, descriptor, output);
+    }
+    // SAFETY: The synchronous user transition keeps every session pointer
+    // valid and exclusively borrowed until the syscall returns.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    loop {
+        // SAFETY: See above; each pointer identifies its live monitor field.
+        let character = unsafe { (&mut *session.keyboard).read_character() }
+            .or_else(|| unsafe { (&mut *session.usb).poll_keyboard_character() })
+            .or_else(|| unsafe { (&mut *session.serial).read_byte() });
+        if let Some(character) = character {
+            output[0] = character;
+            return Ok(1);
+        }
+        interrupts::wait_for_interrupt_from_syscall();
+    }
+}
+
+unsafe fn session_write(
+    context: *mut (),
+    descriptor: u32,
+    input: &[u8],
+) -> Result<usize, nexos_abi::Error> {
+    if !matches!(descriptor, 1 | 2) {
+        return Err(nexos_abi::Error::BadHandle);
+    }
+    // SAFETY: The service context is live for the synchronous syscall.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    // SAFETY: Console and serial pointers identify the monitor-owned outputs.
+    let console = unsafe { &mut *session.console };
+    let serial = unsafe { &mut *session.serial };
+    if input == b"\x1b[2J\x1b[H" {
+        console.clear();
+        console.draw_header();
+        return Ok(input.len());
+    }
+    for byte in input {
+        let character = char::from(*byte);
+        let _ = console.write_char(character);
+        let _ = serial.write_char(character);
+    }
+    Ok(input.len())
+}
+
+unsafe fn session_open(context: *mut (), path: &[u8], flags: u32) -> Result<u32, nexos_abi::Error> {
+    // SAFETY: Session pointers remain valid for this syscall.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    let root = unsafe { &mut *session.root };
+    let storage = unsafe { &mut *session.storage };
+    root.open(storage, path, flags)
+}
+
+unsafe fn session_close(context: *mut (), descriptor: u32) -> Result<(), nexos_abi::Error> {
+    // SAFETY: Session pointers remain valid for this syscall.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    unsafe { (&mut *session.root).close(descriptor) }
+}
+
+unsafe fn session_stat(
+    context: *mut (),
+    path: &[u8],
+) -> Result<nexos_abi::FileStat, nexos_abi::Error> {
+    // SAFETY: Session pointers remain valid for this syscall.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    let root = unsafe { &*session.root };
+    let storage = unsafe { &mut *session.storage };
+    root.stat(storage, path)
+}
+
+unsafe fn session_read_dir(
+    context: *mut (),
+    descriptor: u32,
+) -> Result<Option<nexos_abi::DirectoryEntry>, nexos_abi::Error> {
+    // SAFETY: Session pointers remain valid for this syscall.
+    let session = unsafe { &mut *context.cast::<UserSessionContext>() };
+    let root = unsafe { &mut *session.root };
+    let storage = unsafe { &mut *session.storage };
+    root.read_dir(storage, descriptor)
 }
 
 struct Ascii<'a>(&'a [u8]);

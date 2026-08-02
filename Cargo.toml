@@ -10,6 +10,7 @@ members = [
     "kernel",
     "tools/nexos-installer",
     "tools/nexosctl",
+    "userspace/nexsh",
 ]
 default-members = [
     "crates/nexos-abi",
@@ -23,7 +24,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.12.0-dev"
+version = "0.13.0-dev"
 edition = "2024"
 license = "MIT"
 authors = ["Emilijus"]
@@ -35,3 +36,10 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = "symbols"

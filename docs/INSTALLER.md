@@ -110,6 +110,7 @@ Manual partition editing does not resize or move partitions.
 Build the kernel and fetch Limine first:
 
 ```powershell
+.\scripts\build-userspace.ps1
 .\scripts\build-kernel.ps1
 .\scripts\fetch-limine.ps1
 ```
@@ -120,6 +121,7 @@ A guided combined install:
 cargo run -p nexos-installer --bin nex-install -- `
   --target build\installed.img `
   --kernel target\x86_64-nexos\debug\nexos-kernel `
+  --shell target\x86_64-nexos-user\release\nexsh `
   --limine vendor\limine\limine-binary `
   --size-mib 128 `
   --mode combined `
@@ -137,6 +139,7 @@ cargo run -p nexos-installer --bin nex-install -- `
   --root 3 `
   --bios `
   --kernel target\x86_64-nexos\debug\nexos-kernel `
+  --shell target\x86_64-nexos-user\release\nexsh `
   --limine vendor\limine\limine-binary `
   --yes `
   --confirm build\manual.img
@@ -158,15 +161,16 @@ The FAT32 boot filesystem contains:
 - `/EFI/BOOT/BOOTX64.EFI`
 - `/boot/limine-bios.sys`
 - `/boot/nexos-kernel`
+- `/boot/nexsh`
 - `/limine.conf`
 
 The NexFS root contains `/etc/nexos-release`, `/etc/fstab`,
-`/system/kernel-location`, and `/system/install-manifest`, along with the
-initial `/bin`, `/var`, and `/home` directories. The manifest records the
-partition indexes, kernel size, and kernel CRC32. The kernel is stored only on
-the boot filesystem because the current NexFS v1 single-indirect layout limits
-individual files to roughly 2 MiB.
+`/system/kernel-location`, `/system/install-manifest`, and the optimized
+`/bin/nexsh` ELF, along with the initial `/var` and `/home` directories. The
+manifest records the partition indexes plus kernel and shell sizes and CRC32s.
+The larger debug kernel remains only on the boot filesystem because NexFS v1's
+single-indirect layout limits individual files to roughly 2 MiB.
 
-The installer checks all eight metadata/boot files, runs the NexFS consistency
+The installer checks all ten metadata/boot files, runs the NexFS consistency
 checker, verifies the root UUID, flushes writes, and reports success only after
 the final committed image passes validation.
