@@ -114,13 +114,19 @@ def qemu_command(
         command += ["-drive", f"if=pflash,format=raw,readonly=on,file={firmware}"]
     if iso is not None:
         command += ["-drive", f"file={iso},media=cdrom,format=raw,readonly=on"]
+    namespace_options = (
+        "nvme-ns,drive=nvmedisk,bus=nvme,nsid=1,"
+        f"logical_block_size={sector_size},physical_block_size={sector_size}"
+    )
+    if iso is None:
+        namespace_options += ",bootindex=1"
     command += [
         "-drive",
         f"file={disk},format=raw,if=none,id=nvmedisk",
         "-device",
         "nvme,id=nvme,serial=NEXOSNVME",
         "-device",
-        f"nvme-ns,drive=nvmedisk,bus=nvme,nsid=1,bootindex=1,logical_block_size={sector_size},physical_block_size={sector_size}",
+        namespace_options,
         "-boot",
         f"order={'d' if iso is not None else 'c'},strict=on",
         "-serial",
