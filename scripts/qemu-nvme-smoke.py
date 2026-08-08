@@ -131,6 +131,7 @@ def qemu_command(
         "none",
         "-no-reboot",
     ]
+    return command
 
 
 def verify_media(
