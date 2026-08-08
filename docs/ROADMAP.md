@@ -31,8 +31,11 @@ Legend: **done**, *foundation*, planned.
 14. **SMP and platform completion: application-processor startup, per-CPU
     state/scheduler accounting, HPET clock use, PCI ECAM, and FADT
     power-off/reboot**
-15. Storage and hardware expansion: NVMe, 4Kn media, broader recovery/hotplug,
-    physical-machine compatibility matrix, and longer stress testing
+15. **Storage and hardware expansion: NVMe, 4Kn media, controller recovery,
+    USB disconnect handling, physical-machine compatibility matrix, and
+    longer storage stress testing**
+16. Real multiprocess execution: per-CPU kernel/TSS/syscall stacks, scheduler
+    work distribution, process spawn/wait, and multi-process pipelines
 
 ## Completed foundation acceptance
 
@@ -174,6 +177,13 @@ Legend: **done**, *foundation*, planned.
   kernel-monitor and ring-3 `reboot`/`shutdown` commands.
 - A four-CPU QEMU release gate verifies SMP, HPET, ECAM diagnostics and real
   ACPI S5 exit under both SeaBIOS and UEFI.
+- Native NVMe admin/I/O queues identify namespace 1 and provide bounded DMA
+  reads, writes, flush, timeout handling, and controller-reset queue recovery.
+- GPT, FAT32, NexFS, partition inspection, and the in-OS installer accept
+  512-byte through 4096-byte logical sectors; 4Kn installations are UEFI-only.
+- A release-blocking NVMe gate tests 512-byte and 4Kn namespaces, a forced
+  controller recovery, 256-round boundary reads, and a 4Kn install that boots
+  from NVMe under UEFI after the ISO is removed.
 
 The complete v1 described in the product plan is a long-running systems
 project. Physical hardware support in Milestone 11 is deliberately limited to

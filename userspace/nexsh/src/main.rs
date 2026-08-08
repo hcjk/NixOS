@@ -76,7 +76,7 @@ mod freestanding {
                 b"Commands: help uname smpinfo uptime pwd echo ls cat stat clear shutdown reboot exit\n\
                   Programs and system files are loaded from the mounted NexFS root.\n",
             ),
-            b"uname" => write_all(b"NexOS 0.14.0-dev x86_64 (ring-3 userspace)\n"),
+            b"uname" => write_all(b"NexOS 0.15.0-dev x86_64 (ring-3 userspace)\n"),
             b"smpinfo" => {
                 write_all(b"processors: registered=");
                 write_u64(runtime::processor_count().unwrap_or(0));

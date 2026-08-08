@@ -19,8 +19,8 @@ pub use cache::{CacheStats, CachedBlockDevice};
 pub use fat32::{Fat32, Fat32Info, FatDirectoryEntry, format_fat32};
 pub use installer::{
     BIOS_BOOT_TYPE_GUID, ESP_TYPE_GUID, InstallerGuids, InstallerLayout, NEXFS_TYPE_GUID,
-    PartitionSpan, guided_installer_layout, verify_guided_installer_gpt,
-    write_guided_installer_gpt,
+    PartitionSpan, guided_installer_layout, guided_installer_layout_for_sector_size,
+    verify_guided_installer_gpt, write_guided_installer_gpt,
 };
 pub use partition::{GptHeader, Guid, MbrPartition, PartitionDevice, parse_gpt_header, parse_mbr};
 #[cfg(feature = "alloc")]

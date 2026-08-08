@@ -3,6 +3,7 @@ use nexos_storage::{BlockDevice, MbrPartition, StorageError, parse_gpt_header, p
 use crate::ahci::{self, AhciDevice, AhciProbeStats};
 use crate::ide::{self, IdeDevice};
 use crate::memory::FrameAllocator;
+use crate::nvme::{self, NvmeDevice, NvmeProbeStats};
 use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
 use crate::usb::UsbManager;
@@ -12,6 +13,7 @@ const MAX_STORAGE_DEVICES: usize = 16;
 
 #[derive(Clone, Copy)]
 pub enum StorageDevice {
+    Nvme(NvmeDevice),
     Ahci(AhciDevice),
     Ide(IdeDevice),
     Usb(UsbMassStorageDevice),
@@ -21,6 +23,7 @@ impl StorageDevice {
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
         match self {
+            Self::Nvme(_) => "nvme",
             Self::Ahci(_) => "sata-ahci",
             Self::Ide(_) => "ide-pio",
             Self::Usb(_) => "usb-bot-scsi",
@@ -30,6 +33,7 @@ impl StorageDevice {
     #[must_use]
     pub fn model_bytes(&self) -> &[u8] {
         match self {
+            Self::Nvme(device) => device.model_bytes(),
             Self::Ahci(device) => device.model_bytes(),
             Self::Ide(device) => device.model_bytes(),
             Self::Usb(device) => device.model_bytes(),
@@ -39,6 +43,12 @@ impl StorageDevice {
     #[must_use]
     pub const fn location(&self) -> DeviceLocation {
         match self {
+            Self::Nvme(device) => DeviceLocation::NvmeNamespace {
+                controller: device.controller_index(),
+                namespace: device.namespace_id(),
+                version: device.controller_version(),
+                recoveries: device.recovery_count(),
+            },
             Self::Ahci(device) => DeviceLocation::AhciPort {
                 port: device.port_number(),
                 version: device.controller_version(),
@@ -58,6 +68,7 @@ impl StorageDevice {
 impl BlockDevice for StorageDevice {
     fn sector_size(&self) -> u32 {
         match self {
+            Self::Nvme(device) => device.sector_size(),
             Self::Ahci(device) => device.sector_size(),
             Self::Ide(device) => device.sector_size(),
             Self::Usb(device) => device.sector_size(),
@@ -66,6 +77,7 @@ impl BlockDevice for StorageDevice {
 
     fn sector_count(&self) -> u64 {
         match self {
+            Self::Nvme(device) => device.sector_count(),
             Self::Ahci(device) => device.sector_count(),
             Self::Ide(device) => device.sector_count(),
             Self::Usb(device) => device.sector_count(),
@@ -74,6 +86,7 @@ impl BlockDevice for StorageDevice {
 
     fn read_sectors(&mut self, lba: u64, output: &mut [u8]) -> Result<(), StorageError> {
         match self {
+            Self::Nvme(device) => device.read_sectors(lba, output),
             Self::Ahci(device) => device.read_sectors(lba, output),
             Self::Ide(device) => device.read_sectors(lba, output),
             Self::Usb(device) => device.read_sectors(lba, output),
@@ -82,6 +95,7 @@ impl BlockDevice for StorageDevice {
 
     fn write_sectors(&mut self, lba: u64, input: &[u8]) -> Result<(), StorageError> {
         match self {
+            Self::Nvme(device) => device.write_sectors(lba, input),
             Self::Ahci(device) => device.write_sectors(lba, input),
             Self::Ide(device) => device.write_sectors(lba, input),
             Self::Usb(device) => device.write_sectors(lba, input),
@@ -90,6 +104,7 @@ impl BlockDevice for StorageDevice {
 
     fn flush(&mut self) -> Result<(), StorageError> {
         match self {
+            Self::Nvme(device) => device.flush(),
             Self::Ahci(device) => device.flush(),
             Self::Ide(device) => device.flush(),
             Self::Usb(device) => device.flush(),
@@ -99,6 +114,12 @@ impl BlockDevice for StorageDevice {
 
 #[derive(Clone, Copy)]
 pub enum DeviceLocation {
+    NvmeNamespace {
+        controller: u8,
+        namespace: u32,
+        version: u32,
+        recoveries: u32,
+    },
     AhciPort {
         port: u8,
         version: u32,
@@ -138,9 +159,11 @@ pub struct StorageManager {
     devices: [Option<StorageDevice>; MAX_STORAGE_DEVICES],
     count: usize,
     ahci_count: usize,
+    nvme_count: usize,
     ide_count: usize,
     usb_count: usize,
     ahci_probe: AhciProbeStats,
+    nvme_probe: NvmeProbeStats,
 }
 
 impl StorageManager {
@@ -155,10 +178,25 @@ impl StorageManager {
             devices: [None; MAX_STORAGE_DEVICES],
             count: 0,
             ahci_count: 0,
+            nvme_count: 0,
             ide_count: 0,
             usb_count: 0,
             ahci_probe: AhciProbeStats::default(),
+            nvme_probe: NvmeProbeStats::default(),
         };
+
+        let mut nvme_devices = [None; MAX_STORAGE_DEVICES];
+        let nvme_count = nvme::discover(
+            inventory,
+            paging,
+            allocator,
+            &mut nvme_devices,
+            &mut manager.nvme_probe,
+        );
+        for device in nvme_devices.into_iter().take(nvme_count).flatten() {
+            manager.push(StorageDevice::Nvme(device));
+            manager.nvme_count += 1;
+        }
 
         let mut ahci_devices = [None; MAX_STORAGE_DEVICES];
         let ahci_count = ahci::discover(
@@ -210,6 +248,11 @@ impl StorageManager {
     }
 
     #[must_use]
+    pub const fn nvme_count(&self) -> usize {
+        self.nvme_count
+    }
+
+    #[must_use]
     pub const fn ide_count(&self) -> usize {
         self.ide_count
     }
@@ -225,6 +268,18 @@ impl StorageManager {
     }
 
     #[must_use]
+    pub const fn nvme_probe(&self) -> NvmeProbeStats {
+        self.nvme_probe
+    }
+
+    pub fn recover(&mut self, index: usize) -> Result<(), StorageError> {
+        match self.device_mut(index).ok_or(StorageError::NotFound)? {
+            StorageDevice::Nvme(device) => device.recover(),
+            _ => Err(StorageError::UnsupportedFilesystem),
+        }
+    }
+
+    #[must_use]
     pub fn device(&self, index: usize) -> Option<&StorageDevice> {
         self.devices.get(index)?.as_ref()
     }
@@ -234,9 +289,18 @@ impl StorageManager {
     }
 
     #[must_use]
+    pub fn has_sector_size(&self, sector_size: u32) -> bool {
+        self.devices[..self.count]
+            .iter()
+            .flatten()
+            .any(|device| device.sector_size() == sector_size)
+    }
+
+    #[must_use]
     pub fn device_node(&self, index: usize) -> Option<DeviceNode> {
         let device = self.device(index)?;
         let prefix = match device {
+            StorageDevice::Nvme(_) => "nvme",
             StorageDevice::Ahci(_) => "sata",
             StorageDevice::Ide(_) => "ide",
             StorageDevice::Usb(_) => "usb",
@@ -247,7 +311,8 @@ impl StorageManager {
             .filter(|candidate| {
                 matches!(
                     (device, candidate),
-                    (StorageDevice::Ahci(_), StorageDevice::Ahci(_))
+                    (StorageDevice::Nvme(_), StorageDevice::Nvme(_))
+                        | (StorageDevice::Ahci(_), StorageDevice::Ahci(_))
                         | (StorageDevice::Ide(_), StorageDevice::Ide(_))
                         | (StorageDevice::Usb(_), StorageDevice::Usb(_))
                 )
@@ -260,10 +325,13 @@ impl StorageManager {
         let Some(device) = self.device_mut(index) else {
             return PartitionProbe::Invalid;
         };
-        if device.sector_size() != 512 {
+        let Ok(sector_size) = usize::try_from(device.sector_size()) else {
+            return PartitionProbe::Invalid;
+        };
+        if !(512..=4096).contains(&sector_size) || !sector_size.is_power_of_two() {
             return PartitionProbe::Invalid;
         }
-        let mut sector = [0_u8; 512];
+        let mut sector = alloc::vec![0_u8; sector_size];
         if let Err(error) = device.read_sectors(0, &mut sector) {
             return PartitionProbe::ReadError(error);
         }

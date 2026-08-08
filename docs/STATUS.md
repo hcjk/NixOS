@@ -1,6 +1,6 @@
 # NexOS status
 
-Last verified: 2026-08-02
+Last verified: 2026-08-08
 
 ## Working
 
@@ -30,6 +30,9 @@ Last verified: 2026-08-02
   and functions.
 - SATA AHCI discovery with DMA IDENTIFY, LBA28/LBA48 reads and writes, cache
   flush, bounded polling, BIOS handoff, and task-file error reporting.
+- PCI NVMe controller discovery with admin and I/O submission/completion
+  queues, Identify Controller/Namespace, PRP-backed reads and writes, flush,
+  512-byte/4Kn namespace support, bounded timeouts, and queue-reset recovery.
 - Legacy PCI IDE primary/secondary and master/slave discovery with PIO
   IDENTIFY, reads, writes, cache flush, and bounded polling.
 - Bounded partition child devices and a generic write-back LRU block cache.
@@ -229,17 +232,23 @@ MCFG ECAM enumeration, inspects FADT power registers, and requires ACPI S5 to
 terminate QEMU. Installed-disk boots repeat four-CPU startup and invoke S5 from
 the ring-3 shell syscall.
 
+The milestone-15 storage gate boots QEMU NVMe namespaces with 512-byte and
+4096-byte logical blocks, checks discovery and boundary reads, resets and
+recreates the controller queues, performs 256 read-stress rounds, installs to
+a 4Kn namespace, removes the ISO, and reaches `/bin/nexsh` through UEFI.
+
 ## Not implemented yet
 
 Page-table frame reclamation, separate per-process page tables, asynchronous
 process scheduling, `Spawn`/`Wait`, multiprocess pipelines and redirection,
 cross-CPU task migration, per-CPU TSS/user syscall stacks, USB hotplug
-re-enumeration, multiple USB LUNs, UAS, EHCI/OHCI/UHCI, NVMe, general FAT32
+re-enumeration, multiple USB LUNs, UAS, EHCI/OHCI/UHCI, multiple NVMe
+namespaces, NVMe interrupts/multiple queues, general FAT32
 long-file-name creation, and NexFS journaling remain later work.
 
 The in-OS installer is a deliberately narrow real-hardware preview: BIOS or
-UEFI x86-64, Secure Boot disabled, 512-byte logical sectors, AHCI, legacy IDE,
-or xHCI BOT/SCSI storage, whole-disk guided layout, and PS/2, USB boot-HID, or
-COM1 input. It does not preserve partitions, resize filesystems, detect
-software RAID, or support NVMe/4Kn targets. The host-side tools still refuse
-raw disks.
+UEFI x86-64, Secure Boot disabled, 512-4096-byte logical sectors, NVMe, AHCI,
+legacy IDE, or xHCI BOT/SCSI storage, whole-disk guided layout, and PS/2, USB
+boot-HID, or COM1 input. It does not preserve partitions, resize filesystems,
+detect software RAID, or install legacy BIOS stages on 4Kn targets. The
+host-side tools still refuse raw disks.

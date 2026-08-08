@@ -2,10 +2,12 @@
 
 ## Install from the NexOS release ISO
 
-Milestone 11 adds a guided installer directly to the NexOS kernel monitor. It
-targets x86-64 BIOS or UEFI machines with Secure Boot disabled, an AHCI or
-legacy IDE target disk, and 512-byte logical sectors. The disk must be at least
-128 MiB.
+The guided installer runs directly in the NexOS kernel monitor. It targets
+x86-64 BIOS or UEFI machines with Secure Boot disabled and an NVMe, AHCI,
+legacy IDE, or supported USB mass-storage target. Logical sectors may be a
+power of two from 512 through 4096 bytes. A 512-byte disk must be at least
+128 MiB; a 4Kn install needs at least 512 MiB for a standards-compliant FAT32
+ESP.
 
 Boot the release ISO, then inspect every detected disk:
 
@@ -31,9 +33,9 @@ Do not copy that example without checking `lsblk`; the correct target may be
 nexos> diskutil verify disk0
 ```
 
-Remove the ISO and reboot from the installed disk. The installer writes
-Limine's MBR/HDD stages into the reserved BIOS partition and also installs the
-UEFI fallback loader at `EFI/BOOT/BOOTX64.EFI`.
+Remove the ISO and reboot from the installed disk. On 512-byte media the
+installer writes Limine's MBR/HDD stages and the UEFI fallback loader. On 4Kn
+media it installs `EFI/BOOT/BOOTX64.EFI` and is intentionally UEFI-only.
 
 The in-OS safety checks refuse a partial/mismatched confirmation, the detected
 live boot disk, missing installer payloads, unsupported sector sizes,
@@ -43,13 +45,12 @@ ordinary installed boots intentionally omit the loader module and cannot start
 another destructive install.
 
 The in-OS installer is whole-disk. It does not preserve or resize partitions,
-support NVMe/USB mass-storage/RAID/4Kn targets, or provide rollback after
-writes begin.
+support software RAID, or provide rollback after writes begin.
 
 During installation, NexOS displays a nine-step progress bar covering target
 validation, GPT creation, FAT32 formatting, file copying, BIOS-stage
-installation, NexFS formatting, cache flushing, byte verification, and
-completion.
+installation or 4Kn UEFI selection, NexFS formatting, cache flushing, byte
+verification, and completion.
 
 ## Host image tools
 

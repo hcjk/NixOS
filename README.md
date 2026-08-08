@@ -4,7 +4,7 @@ NexOS is an original, Unix-inspired x86-64 operating system written in Rust
 and assembly. It is not based on Linux and does not provide Linux binary
 compatibility.
 
-The repository currently implements the Milestone 14 platform preview:
+The repository currently implements the Milestone 15 storage and hardware preview:
 
 - a versioned kernel/userspace ABI;
 - host-testable block-device, MBR, and GPT validation code;
@@ -26,7 +26,9 @@ The repository currently implements the Milestone 14 platform preview:
   enumeration, FADT reset/S5 power control, and PS/2 mouse packets;
 - Limine-assisted startup of up to 64 x86-64 processors, shared GDT/IDT and
   local-APIC setup, plus observable per-CPU online/scheduler/idle state;
-- polling SATA AHCI DMA and legacy IDE PIO block drivers;
+- polling NVMe queue, SATA AHCI DMA, and legacy IDE PIO block drivers;
+- NVMe controller reset recovery, 512-byte and 4Kn namespace support, and
+  bounded read-only disk stress diagnostics;
 - bounded partition devices, MBR/GPT validation, and a write-back block cache;
 - a native `no_std` FAT32 reader/writer supporting nested 8.3 directories and
   files;
@@ -46,9 +48,9 @@ The repository currently implements the Milestone 14 platform preview:
 - safe image-only `diskutil` and `nex-install` executables with GPT/MBR
   editing, FAT32/NexFS formatting, guided and manual installs, exact-target
   confirmation, transactional replacement, and post-install verification; and
-- in-kernel `diskutil` inspection/planning plus a destructive, exactly
-  confirmed `nex-install` path for 512-byte-sector AHCI/IDE disks on UEFI
-  x86-64 hardware.
+- in-kernel `diskutil` inspection/planning/recovery plus a destructive,
+  exactly confirmed `nex-install` path for NVMe, AHCI, IDE, and USB storage;
+  512-byte targets install BIOS+UEFI while 4Kn targets install UEFI-only.
 
 Task migration to application processors, multiprocess pipelines, and broader
 storage-controller support remain tracked work. See
@@ -72,11 +74,14 @@ cargo run -p nexosctl -- fs-check build\nexfs.img
 
 The Windows/Linux host tools only operate on ordinary image files and refuse
 raw-device paths. The installer embedded in the release ISO can write a
-physical AHCI or IDE disk after an exact `ERASE-diskN` confirmation.
+physical NVMe, AHCI, IDE, or supported USB disk after an exact
+`ERASE-diskN` confirmation.
 The full NexFS v1 layout and metadata ordering rules are documented in
 [docs/NEXFS.md](docs/NEXFS.md).
 SMP, HPET, ECAM, and ACPI power behavior are documented in
 [docs/PLATFORM.md](docs/PLATFORM.md).
+The tested and expected machine envelope is tracked in
+[docs/HARDWARE_MATRIX.md](docs/HARDWARE_MATRIX.md).
 
 ## Disk utility and installer
 
@@ -111,10 +116,11 @@ nexos> diskutil verify disk0
 ```
 
 Replace `disk0` with the exact target shown by `lsblk`. The install command
-erases the whole selected disk. It refuses non-512-byte-sector disks, disks
-smaller than 128 MiB, the detected live boot disk, missing installer payloads,
-and incomplete confirmation tokens. This release installs both Limine legacy
-BIOS stages and the standard UEFI fallback path. Secure Boot must be disabled.
+erases the whole selected disk. It accepts power-of-two logical sectors from
+512 through 4096 bytes, refuses undersized disks, the detected live boot disk,
+missing installer payloads, and incomplete confirmation tokens. A 512-byte
+target installs both Limine legacy BIOS and UEFI paths; 4Kn installation is
+UEFI-only and requires at least 512 MiB. Secure Boot must be disabled.
 
 ## Kernel build
 
@@ -168,7 +174,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-qemu.ps1
 
 At the `nexos>` prompt, try `help`, `uname`, `meminfo`, `heapinfo`, `heaptest`,
 `cpuinfo`, `smpinfo`, `bootinfo`, `acpi`, `lspci`, `lsusb`, `usbinfo`, `usbtest`, `lsblk`,
-`disktest 0`, `uptime`,
+`disktest 0`, `diskstress 0 256`, `diskutil recover disk0`, `uptime`,
 `virtinfo`, `ps`, `schedinfo`, `syscalls`, `usertest`, `commands`, `shelltest`,
 `vfspath /home/../bin`, `int3`, `clear`, `echo hello`, `shutdown`, `reboot`, or `halt`.
 `usertest` executes a small ring-3 program that queries ABI v1 with `SYSCALL`
@@ -180,12 +186,15 @@ The monitor accepts input from PS/2/i8042, USB boot-protocol keyboards, and
 COM1. USB mice generate events, and BOT/SCSI disks appear as `/dev/usbN`.
 
 Release builds run `scripts/qemu-installer-smoke.py`,
-`scripts/qemu-platform-smoke.py`, and `scripts/qemu-usb-smoke.py`.
+`scripts/qemu-platform-smoke.py`, `scripts/qemu-usb-smoke.py`, and
+`scripts/qemu-nvme-smoke.py`.
 Publication requires four-CPU BIOS/UEFI boots with HPET, ECAM, and ACPI S5,
 plus a fresh in-OS install that
 boots without its ISO under SeaBIOS and UEFI, launches `/bin/nexsh`, and reads
 files from NexFS in ring 3, plus live USB-only keyboard and mouse input,
 one-level hub enumeration, USB-disk installation, and disconnect handling.
+The NVMe gate additionally checks 512-byte and 4Kn namespaces, controller
+reset recovery, 256-round reads, and an ISO-free 4Kn UEFI installation.
 
 For an automated serial-only BIOS smoke test, add `-Headless`. To exercise the
 UEFI path, add `-Firmware uefi`.

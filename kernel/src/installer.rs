@@ -218,7 +218,14 @@ pub fn install(
     if is_boot_device(device, payload.source)? {
         return Err(InstallerError::BootDevice);
     }
-    if device.sector_size() != 512 || device.sector_count() < 262_144 {
+    let sector_size = device.sector_size();
+    if !(512..=4096).contains(&sector_size)
+        || !sector_size.is_power_of_two()
+        || device
+            .sector_count()
+            .checked_mul(u64::from(sector_size))
+            .is_none_or(|bytes| bytes < 128 * 1024 * 1024)
+    {
         return Err(InstallerError::UnsupportedDisk);
     }
 
@@ -254,11 +261,18 @@ pub fn install(
         let _ = filesystem.into_inner()?;
     }
 
-    progress(InstallProgress::new(
-        5,
-        "installing legacy BIOS boot stages",
-    ));
-    install_bios_stages(device, &layout, limine_hdd)?;
+    if sector_size == 512 {
+        progress(InstallProgress::new(
+            5,
+            "installing legacy BIOS boot stages",
+        ));
+        install_bios_stages(device, &layout, limine_hdd)?;
+    } else {
+        progress(InstallProgress::new(
+            5,
+            "4Kn media: UEFI boot path selected",
+        ));
+    }
 
     {
         progress(InstallProgress::new(6, "formatting NexFS root partition"));
@@ -273,7 +287,7 @@ pub fn install(
         write_nexfs_file(
             &mut filesystem,
             "/etc/nexos-release",
-            b"NAME=NexOS\nVERSION=0.14.0-dev\nARCH=x86_64\n",
+            b"NAME=NexOS\nVERSION=0.15.0-dev\nARCH=x86_64\n",
         )?;
         write_nexfs_file(
             &mut filesystem,
@@ -281,7 +295,7 @@ pub fn install(
             b"root / nexfs rw 0 1\nesp /boot fat32 rw 0 2\n",
         )?;
         let manifest = format!(
-            "format=2\nversion=0.14.0-dev\nkernel_bytes={}\nkernel_crc32={:08x}\nshell_bytes={}\nshell_crc32={:08x}\n",
+            "format=2\nversion=0.15.0-dev\nkernel_bytes={}\nkernel_crc32={:08x}\nshell_bytes={}\nshell_crc32={:08x}\n",
             payload.kernel.len(),
             crc32(payload.kernel),
             shell.len(),
@@ -360,7 +374,9 @@ pub fn verify_installation(
         }
         let _ = filesystem.into_inner()?;
     }
-    verify_bios_stages(device, layout, payload.limine_hdd)?;
+    if device.sector_size() == 512 {
+        verify_bios_stages(device, layout, payload.limine_hdd)?;
+    }
     {
         let mut root =
             PartitionDevice::new(device, layout.root.first_lba, layout.root.sector_count)?;
@@ -540,13 +556,17 @@ pub fn is_boot_device(
         BootSource::Optical => Ok(false),
         BootSource::Unknown => Err(InstallerError::UnknownBootSource),
         BootSource::Mbr(expected) => {
-            let mut sector = [0_u8; 512];
+            let sector_size = usize::try_from(device.sector_size())
+                .map_err(|_| InstallerError::UnsupportedDisk)?;
+            let mut sector = vec![0_u8; sector_size];
             device.read_sectors(0, &mut sector)?;
             let identifier = u32::from_le_bytes(sector[440..444].try_into().unwrap());
             Ok(identifier != 0 && identifier == expected)
         }
         BootSource::Gpt(expected) => {
-            let mut sector = [0_u8; 512];
+            let sector_size = usize::try_from(device.sector_size())
+                .map_err(|_| InstallerError::UnsupportedDisk)?;
+            let mut sector = vec![0_u8; sector_size];
             device.read_sectors(0, &mut sector)?;
             let mbr = match parse_mbr(&sector) {
                 Ok(mbr) => mbr,

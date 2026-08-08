@@ -176,9 +176,9 @@ def boot_and_require_prompt(
         if b"SMP: requested=4, registered=4, online=4" not in session.transcript:
             raise RuntimeError(f"{label} boot did not start all four CPUs")
         session.type_command("uname")
-        session.wait_for(b"NexOS 0.14.0-dev x86_64 (ring-3 userspace)", timeout)
+        session.wait_for(b"NexOS 0.15.0-dev x86_64 (ring-3 userspace)", timeout)
         session.type_command("cat /etc/nexos-release")
-        session.wait_for(b"VERSION=0.14.0-dev", timeout)
+        session.wait_for(b"VERSION=0.15.0-dev", timeout)
         session.type_command("ls /")
         session.wait_for(b"home/", timeout)
         session.type_command("smpinfo")

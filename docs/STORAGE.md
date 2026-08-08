@@ -1,7 +1,7 @@
-# NexOS milestone-5 storage
+# NexOS storage subsystem
 
-Milestone 5 establishes one block-device contract from host tests through the
-x86-64 kernel. It deliberately keeps physical-disk installation disabled.
+Milestones 5 through 15 establish one block-device contract from host tests
+through the x86-64 kernel and the guarded in-OS installer.
 
 ## Kernel drivers
 
@@ -11,13 +11,21 @@ x86-64 kernel. It deliberately keeps physical-disk installation disabled.
 - IDE supports PCI class `01:01`, legacy and native channel BARs,
   primary/secondary channels, master/slave devices, ATA IDENTIFY, LBA28/LBA48
   PIO read/write, FLUSH CACHE, and bounded timeouts.
-- The kernel monitor names discovered devices `disk0` through `disk7`.
+- NVMe supports PCI class `01:08`, BAR mapping, controller disable/enable,
+  Identify Controller and namespace 1, physically contiguous admin and I/O
+  queues, page-sized PRP transfers, flush, bounded completion polling, and
+  queue recreation after controller reset. Active namespace formats with
+  512-byte through 4096-byte logical blocks and no metadata are accepted.
+- The kernel monitor names discovered devices `disk0` through `disk15`.
   `lsblk` reports capacity and MBR/GPT metadata. `disktest N` is read-only and
-  reports the CRC32 and signature of LBA 0.
+  reports the CRC32 and signature of LBA 0. `diskstress N R` performs up to
+  4096 read-only boundary rounds, and `diskutil recover diskN` resets an NVMe
+  controller and rebuilds its queues.
 
-The current drivers are synchronous and single-core. Interrupt-driven command
-queues, Native Command Queuing, hot-plug, ATAPI, NVMe, and recovery after a
-controller reset are later work.
+The current drivers are synchronous and submit storage from the bootstrap
+processor. NVMe interrupt queues, multiple namespaces, AHCI Native Command
+Queuing, live NVMe/AHCI hot-plug, and ATAPI remain later work. USB disconnect
+retirement is implemented by the xHCI stack.
 
 ## Shared storage crate
 
@@ -45,7 +53,8 @@ devices. It requires the exact target name and an `ERASE-diskN` token, refuses
 the detected boot disk, writes a new GPT/FAT32/NexFS layout, flushes it, and
 reads the installed payload back before reporting success.
 
-The in-kernel path is whole-disk and installs both Limine HDD/MBR stages and a
-UEFI fallback loader. It supports 512-byte logical sectors and does not resize
-or preserve existing partitions. NVMe, USB mass-storage transfers, hotplug,
-RAID, and 4Kn media remain outside this release.
+The in-kernel path is whole-disk. On 512-byte media it installs both Limine
+HDD/MBR stages and a UEFI fallback loader. On 4Kn media it creates a larger
+FAT32 ESP and installs UEFI only, because Limine's legacy stage offsets are
+defined in 512-byte units. It does not resize or preserve partitions, and it
+does not support RAID.

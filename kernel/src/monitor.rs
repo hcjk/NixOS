@@ -21,7 +21,8 @@ use crate::syscall;
 use crate::usb::UsbManager;
 use crate::user;
 use nexos_storage::{
-    BIOS_BOOT_TYPE_GUID, BlockDevice, ESP_TYPE_GUID, NEXFS_TYPE_GUID, read_partition_table,
+    BIOS_BOOT_TYPE_GUID, BlockDevice, ESP_TYPE_GUID, NEXFS_TYPE_GUID, StorageError,
+    read_partition_table,
 };
 
 const MAX_COMMAND_LENGTH: usize = 128;
@@ -276,7 +277,7 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "          bootinfo acpi lspci lsusb usbinfo usbtest lsblk disktest diskutil"
+                        "          bootinfo acpi lspci lsusb usbinfo usbtest lsblk disktest diskstress diskutil"
                     ),
                 );
                 self.write_line(
@@ -305,7 +306,7 @@ impl<'a> Monitor<'a> {
             }
             b"uname" => self.write_line(
                 FOREGROUND,
-                format_args!("NexOS 0.14.0-dev x86_64 (independent kernel)"),
+                format_args!("NexOS 0.15.0-dev x86_64 (independent kernel)"),
             ),
             b"meminfo" => self.write_line(
                 FOREGROUND,
@@ -368,6 +369,16 @@ impl<'a> Monitor<'a> {
                     self.write_line(WARNING, format_args!("usage: diskutil verify disk<number>"));
                 }
             }
+            _ if command.starts_with(b"diskutil recover ") => {
+                if let Some(index) = parse_disk_name(&command[17..]) {
+                    self.recover_disk(index);
+                } else {
+                    self.write_line(
+                        WARNING,
+                        format_args!("usage: diskutil recover disk<number>"),
+                    );
+                }
+            }
             b"nex-install" => self.print_installer_help(),
             _ if command.starts_with(b"nex-install ") => {
                 if let Some(index) = parse_install_arguments(&command[12..]) {
@@ -384,6 +395,16 @@ impl<'a> Monitor<'a> {
                     self.test_disk(index);
                 } else {
                     self.write_line(WARNING, format_args!("usage: disktest <disk-number>"));
+                }
+            }
+            _ if command.starts_with(b"diskstress ") => {
+                if let Some((index, rounds)) = parse_diskstress_arguments(&command[11..]) {
+                    self.stress_disk(index, rounds);
+                } else {
+                    self.write_line(
+                        WARNING,
+                        format_args!("usage: diskstress <disk-number> <1-4096 rounds>"),
+                    );
                 }
             }
             b"irqinfo" => self.print_interrupts(),
@@ -1071,7 +1092,8 @@ impl<'a> Monitor<'a> {
         self.write_line(
             FOREGROUND,
             format_args!(
-                "block devices: {count} (AHCI={}, IDE={}, USB={})",
+                "block devices: {count} (NVMe={}, AHCI={}, IDE={}, USB={})",
+                self.storage.nvme_count(),
                 self.storage.ahci_count(),
                 self.storage.ide_count(),
                 self.storage.usb_count()
@@ -1092,6 +1114,20 @@ impl<'a> Monitor<'a> {
             let model_length = model_bytes.len().min(model.len());
             model[..model_length].copy_from_slice(&model_bytes[..model_length]);
             match location {
+                DeviceLocation::NvmeNamespace {
+                    controller,
+                    namespace,
+                    version,
+                    recoveries,
+                } => self.write_line(
+                    FOREGROUND,
+                    format_args!(
+                        "disk{index} (/dev/{}{}): {kind}, NVMe {version:#010x} controller {controller} namespace {namespace}, recoveries={recoveries}, {capacity_mib} MiB, {sector_size}-byte sectors, {}",
+                        node.map_or("nvme", |node| node.prefix),
+                        node.map_or(index, |node| node.ordinal),
+                        Ascii(&model[..model_length])
+                    ),
+                ),
                 DeviceLocation::AhciPort { port, version } => self.write_line(
                     FOREGROUND,
                     format_args!(
@@ -1185,6 +1221,10 @@ impl<'a> Monitor<'a> {
             format_args!("diskutil verify disk<number>   - verify an installed NexOS disk"),
         );
         self.write_line(
+            FOREGROUND,
+            format_args!("diskutil recover disk<number>  - reset and requeue an NVMe controller"),
+        );
+        self.write_line(
             MUTED,
             format_args!("Use lsblk for all disks. Partition resizing is not supported."),
         );
@@ -1272,10 +1312,10 @@ impl<'a> Monitor<'a> {
         };
         let sector_size = device.sector_size();
         let sectors = device.sector_count();
-        if sector_size != 512 {
+        if !(512..=4096).contains(&sector_size) || !sector_size.is_power_of_two() {
             self.write_line(
                 WARNING,
-                format_args!("disk{index}: installer requires 512-byte sectors"),
+                format_args!("disk{index}: installer supports 512-4096 byte power-of-two sectors"),
             );
             return;
         }
@@ -1299,8 +1339,11 @@ impl<'a> Monitor<'a> {
             }
             Ok(false) => {}
         }
-        let layout =
-            nexos_storage::guided_installer_layout(sectors, nexos_storage::Guid::default());
+        let layout = nexos_storage::guided_installer_layout_for_sector_size(
+            sectors,
+            sector_size,
+            nexos_storage::Guid::default(),
+        );
         match layout {
             Ok(layout) => {
                 self.write_line(
@@ -1310,8 +1353,14 @@ impl<'a> Monitor<'a> {
                 self.write_line(
                     FOREGROUND,
                     format_args!(
-                        "  p1 BIOS reserve: LBA {} +{}",
-                        layout.bios.first_lba, layout.bios.sector_count
+                        "  p1 {}: LBA {} +{}",
+                        if sector_size == 512 {
+                            "BIOS reserve"
+                        } else {
+                            "alignment reserve (4Kn is UEFI-only)"
+                        },
+                        layout.bios.first_lba,
+                        layout.bios.sector_count
                     ),
                 );
                 self.write_line(
@@ -1355,7 +1404,7 @@ impl<'a> Monitor<'a> {
         );
         self.write_line(
             WARNING,
-            format_args!("The guided layout installs both BIOS and UEFI boot paths."),
+            format_args!("512-byte targets install BIOS+UEFI; 4Kn targets install UEFI only."),
         );
         if !self.install_payload.ready() {
             self.write_line(
@@ -1382,13 +1431,21 @@ impl<'a> Monitor<'a> {
             .saturating_mul(u64::from(device.sector_size()))
             / 1024
             / 1024;
+        let installs_bios = device.sector_size() == 512;
         self.write_line(
             WARNING,
             format_args!("ERASING disk{index} ({capacity_mib} MiB). This cannot be undone."),
         );
         self.write_line(
             MUTED,
-            format_args!("Starting verified BIOS/UEFI installation..."),
+            format_args!(
+                "Starting verified {} installation...",
+                if installs_bios {
+                    "BIOS/UEFI"
+                } else {
+                    "UEFI-only 4Kn"
+                }
+            ),
         );
         let payload = self.install_payload;
         let Self {
@@ -1471,14 +1528,11 @@ impl<'a> Monitor<'a> {
             self.write_line(WARNING, format_args!("disk{index} does not exist"));
             return;
         };
-        if device.sector_size() != 512 {
-            self.write_line(
-                WARNING,
-                format_args!("disktest currently supports 512-byte sectors"),
-            );
+        let Ok(sector_size) = usize::try_from(device.sector_size()) else {
+            self.write_line(WARNING, format_args!("disk{index} sector size is invalid"));
             return;
-        }
-        let mut sector = [0_u8; 512];
+        };
+        let mut sector = alloc::vec![0_u8; sector_size];
         let result = device.read_sectors(0, &mut sector);
         match result {
             Ok(()) => {
@@ -1496,6 +1550,64 @@ impl<'a> Monitor<'a> {
                 format_args!("disk{index} read-only test failed: {error:?}"),
             ),
         }
+    }
+
+    fn recover_disk(&mut self, index: usize) {
+        match self.storage.recover(index) {
+            Ok(()) => self.write_line(
+                INFO,
+                format_args!("disk{index} NVMe controller reset and I/O queues recreated"),
+            ),
+            Err(StorageError::UnsupportedFilesystem) => self.write_line(
+                WARNING,
+                format_args!("disk{index} does not expose controller-reset recovery"),
+            ),
+            Err(error) => self.write_line(
+                WARNING,
+                format_args!("disk{index} recovery failed: {error:?}"),
+            ),
+        }
+    }
+
+    fn stress_disk(&mut self, index: usize, rounds: usize) {
+        let Some(device) = self.storage.device_mut(index) else {
+            self.write_line(WARNING, format_args!("disk{index} does not exist"));
+            return;
+        };
+        let Ok(sector_size) = usize::try_from(device.sector_size()) else {
+            self.write_line(WARNING, format_args!("disk{index} sector size is invalid"));
+            return;
+        };
+        let sectors = device.sector_count();
+        if sectors == 0 || !(1..=4096).contains(&rounds) {
+            self.write_line(WARNING, format_args!("invalid disk stress parameters"));
+            return;
+        }
+        let mut sector = alloc::vec![0_u8; sector_size];
+        let mut digest = 0_u32;
+        for round in 0..rounds {
+            let lba = match round % 3 {
+                0 => 0,
+                1 => sectors / 2,
+                _ => sectors - 1,
+            };
+            if let Err(error) = device.read_sectors(lba, &mut sector) {
+                self.write_line(
+                    WARNING,
+                    format_args!(
+                        "disk{index} stress failed at round {round}, LBA {lba}: {error:?}"
+                    ),
+                );
+                return;
+            }
+            digest = digest.rotate_left(5) ^ nexos_storage::crc32(&sector);
+        }
+        self.write_line(
+            INFO,
+            format_args!(
+                "disk{index} read stress passed: {rounds} rounds, {sector_size}-byte sectors, digest={digest:#010x}"
+            ),
+        );
     }
 
     fn print_mouse(&mut self) {
@@ -1751,4 +1863,11 @@ fn parse_install_arguments(bytes: &[u8]) -> Option<usize> {
         return None;
     }
     parse_disk_name(target)
+}
+
+fn parse_diskstress_arguments(bytes: &[u8]) -> Option<(usize, usize)> {
+    let separator = bytes.iter().position(|byte| *byte == b' ')?;
+    let disk = parse_decimal(&bytes[..separator])?;
+    let rounds = parse_decimal(&bytes[separator + 1..])?;
+    (1..=4096).contains(&rounds).then_some((disk, rounds))
 }

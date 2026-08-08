@@ -66,7 +66,7 @@ pub fn format_fat32<D: BlockDevice>(
 ) -> Result<Fat32Info, StorageError> {
     let bytes_per_sector =
         usize::try_from(device.sector_size()).map_err(|_| StorageError::TooLarge)?;
-    if bytes_per_sector != 512 {
+    if !(512..=4096).contains(&bytes_per_sector) || !bytes_per_sector.is_power_of_two() {
         return Err(StorageError::UnsupportedSectorSize);
     }
     let total_sectors = u32::try_from(device.sector_count()).map_err(|_| StorageError::TooLarge)?;
@@ -130,7 +130,7 @@ pub fn format_fat32<D: BlockDevice>(
     }
     device.flush()?;
     Ok(Fat32Info {
-        bytes_per_sector: 512,
+        bytes_per_sector: bytes_per_sector_u16,
         sectors_per_cluster,
         total_sectors,
         sectors_per_fat,
@@ -1033,5 +1033,14 @@ mod tests {
             Err(StorageError::InvalidName)
         );
         assert_eq!(short_name("kernel.bin").unwrap(), *b"KERNEL  BIN");
+    }
+
+    #[test]
+    fn chooses_valid_four_kn_geometry() {
+        let (sectors_per_cluster, sectors_per_fat, clusters) =
+            choose_format_geometry(76_800, 4096).unwrap();
+        assert_eq!(sectors_per_cluster, 1);
+        assert!(sectors_per_fat > 0);
+        assert!(clusters >= FAT32_MIN_CLUSTERS);
     }
 }

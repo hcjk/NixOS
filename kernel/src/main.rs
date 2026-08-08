@@ -18,6 +18,7 @@ mod installer;
 mod interrupts;
 mod memory;
 mod monitor;
+mod nvme;
 mod paging;
 mod pci;
 mod power;
@@ -109,7 +110,7 @@ _start:
 extern "C" fn kernel_main() -> ! {
     let mut serial = serial::SerialPort::new(0x3f8);
     serial.init();
-    let _ = writeln!(serial, "\nNexOS 0.14.0-dev x86-64");
+    let _ = writeln!(serial, "\nNexOS 0.15.0-dev x86-64");
     let _ = writeln!(serial, "original Rust kernel; Linux ABI is not used");
 
     if !BASE_REVISION.is_supported() {
@@ -258,7 +259,7 @@ extern "C" fn kernel_main() -> ! {
     console.clear();
     console.draw_header();
     console.set_color(framebuffer::ACCENT);
-    let _ = writeln!(console, "NexOS 0.14.0-dev  |  x86-64 kernel monitor");
+    let _ = writeln!(console, "NexOS 0.15.0-dev  |  x86-64 kernel monitor");
     console.set_color(framebuffer::INFO);
     let _ = writeln!(console, "Independent Rust kernel - not based on Linux");
     console.reset_color();
@@ -343,11 +344,24 @@ extern "C" fn kernel_main() -> ! {
         storage::StorageManager::discover(&pci, &mut paging, &mut allocator, &mut usb);
     let _ = writeln!(
         serial,
-        "storage: {} disks (AHCI={}, IDE={}, USB={})",
+        "storage: {} disks (NVMe={}, AHCI={}, IDE={}, USB={})",
         storage.count(),
+        storage.nvme_count(),
         storage.ahci_count(),
         storage.ide_count(),
         storage.usb_count()
+    );
+    let nvme_probe = storage.nvme_probe();
+    let _ = writeln!(
+        serial,
+        "NVMe probe: controllers={}, BAR={:#x}, mapped={}, namespaces={}, unsupported={}, failures={}, map error={:?}",
+        nvme_probe.controllers,
+        nvme_probe.last_bar,
+        nvme_probe.mapped_controllers,
+        nvme_probe.initialized_namespaces,
+        nvme_probe.unsupported_controllers,
+        nvme_probe.initialization_failures,
+        nvme_probe.map_error
     );
     let ahci_probe = storage.ahci_probe();
     let _ = writeln!(
@@ -397,7 +411,9 @@ extern "C" fn kernel_main() -> ! {
     }
     let _ = writeln!(
         serial,
-        "milestone 14 platform services ready: CPUs={}/{}, clock={}, PCI={}, ACPI power={}",
+        "milestone 15 storage services ready: NVMe={}, 4Kn-capable={}, CPUs={}/{}, clock={}, PCI={}, ACPI power={}",
+        storage.nvme_count(),
+        storage.has_sector_size(4096),
         smp.online,
         smp.registered,
         if hpet_clock.is_some() { "HPET" } else { "PIT" },
@@ -412,8 +428,9 @@ extern "C" fn kernel_main() -> ! {
     );
     let _ = writeln!(
         console,
-        "[ok] storage: {} disks (AHCI {}, IDE {}, USB {})",
+        "[ok] storage: {} disks (NVMe {}, AHCI {}, IDE {}, USB {})",
         storage.count(),
+        storage.nvme_count(),
         storage.ahci_count(),
         storage.ide_count(),
         storage.usb_count()
