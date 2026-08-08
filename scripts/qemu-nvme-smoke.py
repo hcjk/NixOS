@@ -158,7 +158,7 @@ def verify_media(
         for marker in (
             b"NVMe probe: controllers=1",
             b"mapped=1, namespaces=1",
-            f"{sector_size}-byte sectors".encode("ascii"),
+            f"x {sector_size} bytes".encode("ascii"),
         ):
             if marker not in session.transcript:
                 raise RuntimeError(f"NVMe {sector_size} missing {marker!r}\n{session.tail()}")
