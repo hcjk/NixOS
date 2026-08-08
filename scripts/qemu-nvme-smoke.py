@@ -212,7 +212,7 @@ def verify_four_kn_install(
         session.wait_for(b"nexsh>", timeout)
         for marker in (
             b"rootfs: launching /bin/nexsh",
-            b"4096-byte sectors",
+            b"x 4096 bytes",
         ):
             if marker not in session.transcript:
                 raise RuntimeError(f"4Kn installed boot missing {marker!r}\n{session.tail()}")
