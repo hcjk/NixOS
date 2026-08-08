@@ -1,10 +1,7 @@
 use crate::memory::FrameAllocator;
 use crate::paging::PagingInfo;
 use crate::pci::PciInventory;
-use crate::xhci::{
-    MAX_USB_STORAGE_DEVICES, ProbeStats, UsbInputEvent, UsbMassStorageDevice, XhciController,
-    XhciManager,
-};
+use crate::xhci::{ProbeStats, UsbInputEvent, UsbMassStorageDevice, XhciController, XhciManager};
 use nexos_usb::hid::MouseReport;
 
 pub struct UsbManager {
@@ -81,10 +78,7 @@ impl UsbManager {
         self.mouse_events
     }
 
-    pub fn mass_storage_devices(
-        &mut self,
-        output: &mut [Option<UsbMassStorageDevice>; MAX_USB_STORAGE_DEVICES],
-    ) -> usize {
+    pub fn mass_storage_devices(&mut self, output: &mut [Option<UsbMassStorageDevice>]) -> usize {
         self.xhci.mass_storage_devices(output)
     }
 }

@@ -2150,10 +2150,7 @@ impl XhciManager {
         None
     }
 
-    pub fn mass_storage_devices(
-        &mut self,
-        output: &mut [Option<UsbMassStorageDevice>; MAX_USB_STORAGE_DEVICES],
-    ) -> usize {
+    pub fn mass_storage_devices(&mut self, output: &mut [Option<UsbMassStorageDevice>]) -> usize {
         output.fill(None);
         let mut count = 0;
         for (controller_index, controller) in self.controllers.iter_mut().flatten().enumerate() {

@@ -1,3 +1,6 @@
+use alloc::boxed::Box;
+use alloc::vec;
+
 use nexos_storage::{BlockDevice, MbrPartition, StorageError, parse_gpt_header, parse_mbr};
 
 use crate::ahci::{self, AhciDevice, AhciProbeStats};
@@ -156,7 +159,7 @@ pub enum PartitionProbe {
 }
 
 pub struct StorageManager {
-    devices: [Option<StorageDevice>; MAX_STORAGE_DEVICES],
+    devices: Box<[Option<StorageDevice>]>,
     count: usize,
     ahci_count: usize,
     nvme_count: usize,
@@ -175,7 +178,7 @@ impl StorageManager {
         usb: &mut UsbManager,
     ) -> Self {
         let mut manager = Self {
-            devices: [None; MAX_STORAGE_DEVICES],
+            devices: vec![None; MAX_STORAGE_DEVICES].into_boxed_slice(),
             count: 0,
             ahci_count: 0,
             nvme_count: 0,
@@ -185,7 +188,7 @@ impl StorageManager {
             nvme_probe: NvmeProbeStats::default(),
         };
 
-        let mut nvme_devices = [None; MAX_STORAGE_DEVICES];
+        let mut nvme_devices = vec![None; MAX_STORAGE_DEVICES].into_boxed_slice();
         let nvme_count = nvme::discover(
             inventory,
             paging,
@@ -193,12 +196,12 @@ impl StorageManager {
             &mut nvme_devices,
             &mut manager.nvme_probe,
         );
-        for device in nvme_devices.into_iter().take(nvme_count).flatten() {
+        for device in nvme_devices.iter().copied().take(nvme_count).flatten() {
             manager.push(StorageDevice::Nvme(device));
             manager.nvme_count += 1;
         }
 
-        let mut ahci_devices = [None; MAX_STORAGE_DEVICES];
+        let mut ahci_devices = vec![None; MAX_STORAGE_DEVICES].into_boxed_slice();
         let ahci_count = ahci::discover(
             inventory,
             paging,
@@ -206,15 +209,16 @@ impl StorageManager {
             &mut ahci_devices,
             &mut manager.ahci_probe,
         );
-        for device in ahci_devices.into_iter().take(ahci_count).flatten() {
+        for device in ahci_devices.iter().copied().take(ahci_count).flatten() {
             manager.push(StorageDevice::Ahci(device));
             manager.ahci_count += 1;
         }
 
-        let mut ide_devices = [None; MAX_STORAGE_DEVICES];
+        let mut ide_devices = vec![None; MAX_STORAGE_DEVICES].into_boxed_slice();
         let ide_count = ide::discover(inventory, &mut ide_devices);
         for device in ide_devices
-            .into_iter()
+            .iter()
+            .copied()
             .take(ide_count)
             .flatten()
             .take(MAX_STORAGE_DEVICES - manager.count)
@@ -223,10 +227,11 @@ impl StorageManager {
             manager.ide_count += 1;
         }
 
-        let mut usb_devices = [None; MAX_USB_STORAGE_DEVICES];
+        let mut usb_devices = vec![None; MAX_USB_STORAGE_DEVICES].into_boxed_slice();
         let usb_count = usb.mass_storage_devices(&mut usb_devices);
         for device in usb_devices
-            .into_iter()
+            .iter()
+            .copied()
             .take(usb_count)
             .flatten()
             .take(MAX_STORAGE_DEVICES - manager.count)
